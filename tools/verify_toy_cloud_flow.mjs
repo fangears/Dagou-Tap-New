@@ -162,6 +162,7 @@ function makeHarness(toy) {
       classes: ['sfx-option', 'is-active'],
       dataset: { sfx: 'hajimi' },
     }),
+    new FakeElement({ classes: ['sfx-option'], dataset: { sfx: 'villager' } }),
   ];
   const hajimiSkinSwitcher = new FakeElement({
     classes: ['skin-switcher', 'is-open'],
@@ -227,6 +228,7 @@ function makeHarness(toy) {
       settingsSeen: 'dagou_settings_seen_v1',
       dingdongNewSeen: 'dagou_dingdong_new_seen_v1',
       hajimiNewSeen: 'dagou_hajimi_new_seen_v1',
+      villagerNewSeen: 'dagou_villager_new_seen_v1',
       pianoMode: 'dagou_piano_mode_v1',
       octaveSwitching: 'dagou_octave_switching_v1',
       pianoOctaveStart: 'dagou_piano_octave_start_v1',
@@ -238,6 +240,7 @@ function makeHarness(toy) {
       'dagou_settings_seen_v1',
       'dagou_dingdong_new_seen_v1',
       'dagou_hajimi_new_seen_v1',
+      'dagou_villager_new_seen_v1',
       'dagou_piano_mode_v1',
       'dagou_octave_switching_v1',
       'dagou_piano_octave_start_v1',
@@ -252,6 +255,19 @@ function makeHarness(toy) {
     ],
     VIDEO_UNLOCK_ITEM_IDS: new Set(['dingdong', 'hajimi']),
     LOCKED_SFX_IDS: new Set(['dingdong']),
+    SFX_LABELS: Object.freeze({
+      dagou: '大狗叫',
+      dingdong: '叮咚鸡',
+      hajimi: '哈基米',
+      villager: '方块村民',
+    }),
+    NEW_ITEM_CLOUD_KEYS: Object.freeze({
+      dingdong: 'dagou_dingdong_new_seen_v1',
+      hajimi: 'dagou_hajimi_new_seen_v1',
+      villager: 'dagou_villager_new_seen_v1',
+    }),
+    NEW_ITEM_IDS: new Set(['dingdong', 'hajimi', 'villager']),
+    SFX_NEW_ITEM_IDS: new Set(['dingdong', 'villager']),
     SFX_SAMPLE_SETS: Object.freeze({
       dagou: Object.freeze({ da: 'da', gou: 'gou', jiao: 'jiao' }),
       hajimi: Object.freeze({ da: 'ha', gou: 'ji', jiao: 'mi' }),
@@ -259,6 +275,11 @@ function makeHarness(toy) {
         da: 'dingdongji_ding',
         gou: 'dingdongji_dong',
         jiao: 'dingdongji_ji',
+      }),
+      villager: Object.freeze({
+        da: 'villager_hm',
+        gou: 'villager_ha',
+        jiao: 'villager_hmmm',
       }),
     }),
     CHARACTER_IMAGE_SETS: Object.freeze({
@@ -276,6 +297,11 @@ function makeHarness(toy) {
         close: 'Image/maodie_close_mouth.png',
         open: 'Image/maodie_open_mouth.png',
         alt: '哈基米',
+      }),
+      villager: Object.freeze({
+        close: 'Image/villager_close_mouth.png',
+        open: 'Image/villager_open_mouth.png',
+        alt: '方块村民',
       }),
     }),
     HAJIMI_ATLAS_URL: 'Image/donghaidihuang_atlas.webp?v=20260721-beat-synced',
@@ -332,6 +358,9 @@ function makeHarness(toy) {
     zones: [{}],
     clearQueuedPerformanceInput() {},
     settleActivePerformanceInput() {},
+    liveVoices: new Set(),
+    forceStopVoice() {},
+    resetVillagerHitState() {},
     renderKeyGrid() {},
     renderOctaveControls() {},
     buildGrid() {},
@@ -375,8 +404,13 @@ function makeHarness(toy) {
       cloudReadable: false,
       sfxUnlocked: false,
       settingsSeen: false,
-      newSeen: { dingdong: false, hajimi: false },
-      locallyChanged: { settingsSeen: false, dingdong: false, hajimi: false },
+      newSeen: { dingdong: false, hajimi: false, villager: false },
+      locallyChanged: {
+        settingsSeen: false,
+        dingdong: false,
+        hajimi: false,
+        villager: false,
+      },
     },
     toyStateReady: null,
     setNavigationMute(value) {
@@ -438,12 +472,43 @@ for (const key of [
   'dagou_settings_seen_v1',
   'dagou_dingdong_new_seen_v1',
   'dagou_hajimi_new_seen_v1',
+  'dagou_villager_new_seen_v1',
   'dagou_piano_mode_v1',
   'dagou_rhythm_snap_v1',
   'dagou_show_grid_v1',
 ]) {
   assert.ok(mainSource.includes(`'${key}'`), `Missing cloud key ${key}`);
 }
+assert.match(
+  mainSource,
+  /villager:\s*Object\.freeze\(\{\s*da:\s*'villager_hm',\s*gou:\s*'villager_ha',\s*jiao:\s*'villager_hmmm',?\s*}\)/,
+  'SFX_SAMPLE_SETS must register all three villager samples'
+);
+assert.match(
+  mainSource,
+  /villager:\s*Object\.freeze\(\{\s*close:\s*'Image\/villager_close_mouth\.png',\s*open:\s*'Image\/villager_open_mouth\.png',\s*alt:\s*'方块村民',?\s*}\)/,
+  'CHARACTER_IMAGE_SETS must register both villager frames'
+);
+assert.match(
+  mainSource,
+  /const VIDEO_UNLOCK_ITEM_IDS = new Set\(\['dingdong', 'hajimi'\]\);/,
+  'the existing Dingdong and emperor video-unlock membership must stay unchanged'
+);
+assert.match(
+  mainSource,
+  /const LOCKED_SFX_IDS = new Set\(\['dingdong'\]\);/,
+  'Villager must not enter the locked SFX set'
+);
+assert.match(
+  mainSource,
+  /villager:\s*TOY_CLOUD_KEYS\.villagerNewSeen/,
+  'the generic NEW map must point Villager to its independent cloud key'
+);
+assert.match(
+  mainSource,
+  /const SFX_NEW_ITEM_IDS = new Set\(\['dingdong', 'villager'\]\);/,
+  'only Dingdong and Villager sound-card clicks may clear a card NEW badge'
+);
 assert.match(
   mainSource,
   /const DEBUG_UNLOCK_SFX = (?:true|false);/,
@@ -526,6 +591,39 @@ assert.doesNotMatch(
   hajimiButtonBlock[0],
   /sfx-lock|sfx-new/,
   'the Hajimi sound card must never carry a lock or NEW badge'
+);
+const villagerButton = htmlSource.match(
+  /<button class="([^"]*)"[^>]*data-sfx="villager"/
+);
+assert.ok(villagerButton, 'Missing villager option');
+assert.doesNotMatch(
+  villagerButton[1],
+  /\bis-locked\b/,
+  'villager must always be free'
+);
+assert.doesNotMatch(
+  villagerButton[1],
+  /\bis-active\b/,
+  'villager must not replace Hajimi as the default'
+);
+const villagerButtonBlock = htmlSource.match(
+  /<button class="[^"]*"[^>]*data-sfx="villager"[\s\S]*?<\/button>/
+);
+assert.ok(villagerButtonBlock, 'Missing villager option block');
+assert.match(
+  villagerButtonBlock[0],
+  /sfx-new[\s\S]*?Image\/villager_close_mouth\.png[\s\S]*?方块村民/,
+  'the free villager option must show its NEW badge, image, and label'
+);
+assert.doesNotMatch(
+  villagerButtonBlock[0],
+  /sfx-lock/,
+  'the free villager option must not render a lock'
+);
+assert.match(
+  htmlSource,
+  /非官方 Minecraft 内容，未获 Mojang 或 Microsoft 认可或关联。/,
+  'settings must include the unofficial Minecraft notice'
 );
 assert.doesNotMatch(
   htmlSource,
@@ -649,6 +747,10 @@ for (const [settingName, defaultChecked] of [
   assert.equal(harness.context.topControls.classList.contains('has-update-dot'), true);
   assert.equal(option(harness, 'dingdong').classList.contains('is-locked'), true);
   assert.equal(option(harness, 'hajimi').classList.contains('is-locked'), false);
+  assert.equal(option(harness, 'villager').classList.contains('is-locked'), false);
+  assert.equal(option(harness, 'villager').classList.contains('is-new-hidden'), false);
+  assert.equal(harness.context.toyCloudState.newSeen.villager, false);
+  assert.equal(harness.context.toyCloudState.locallyChanged.villager, false);
   assert.equal(
     harness.hajimiSkinEmperor.classList.contains('is-locked'),
     true,
@@ -658,6 +760,29 @@ for (const [settingName, defaultChecked] of [
   assert.equal(harness.hajimiSkinSwitcher.classList.contains('is-open'), true);
   assert.equal(option(harness, 'hajimi').classList.contains('is-active'), true);
   assert.equal(option(harness, 'dagou').classList.contains('is-locked'), false);
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(harness.context.SFX_SAMPLE_SETS.villager)),
+    {
+      da: 'villager_hm',
+      gou: 'villager_ha',
+      jiao: 'villager_hmmm',
+    },
+    'villager must preserve the three semantic sample positions'
+  );
+  assert.deepEqual(
+    JSON.parse(JSON.stringify(harness.context.CHARACTER_IMAGE_SETS.villager)),
+    {
+      close: 'Image/villager_close_mouth.png',
+      open: 'Image/villager_open_mouth.png',
+      alt: '方块村民',
+    },
+    'villager must register both character frames'
+  );
+  assert.match(
+    setup.log.find(entry => entry.startsWith('get:')) ?? '',
+    /dagou_villager_new_seen_v1/,
+    'the Toy cloud key list must request the villager NEW state'
+  );
   assert.deepEqual(
     { ...harness.context.performanceSettings },
     {
@@ -679,6 +804,7 @@ for (const [settingName, defaultChecked] of [
       dagou_settings_seen_v1: '1',
       dagou_dingdong_new_seen_v1: '1',
       dagou_hajimi_new_seen_v1: '1',
+      dagou_villager_new_seen_v1: '1',
       dagou_piano_mode_v1: '1',
       dagou_octave_switching_v1: '1',
       dagou_piano_octave_start_v1: '6',
@@ -701,6 +827,9 @@ for (const [settingName, defaultChecked] of [
     harness.hajimiSkinEmperor.classList.contains('is-new-hidden'),
     true
   );
+  assert.equal(option(harness, 'villager').classList.contains('is-new-hidden'), true);
+  assert.equal(harness.context.toyCloudState.newSeen.villager, true);
+  assert.equal(harness.context.toyCloudState.locallyChanged.villager, false);
   assert.deepEqual(
     { ...harness.context.performanceSettings },
     {
@@ -793,6 +922,21 @@ for (const [settingName, defaultChecked] of [
     'the skin switcher must collapse when Hajimi is not selected'
   );
   assert.equal(harness.hajimiSkinClassic.disabled, true);
+  await harness.context.handleSfxOptionClick(option(harness, 'villager'));
+  assert.equal(harness.context.selectedSfxId, 'villager');
+  assert.equal(option(harness, 'villager').classList.contains('is-active'), true);
+  assert.equal(option(harness, 'villager').classList.contains('is-locked'), false);
+  assert.equal(option(harness, 'villager').classList.contains('is-new-hidden'), true);
+  assert.equal(harness.context.toyCloudState.newSeen.villager, true);
+  assert.equal(harness.context.toyCloudState.locallyChanged.villager, true);
+  assert.equal(harness.dogCloseImage.src, 'Image/villager_close_mouth.png');
+  assert.equal(harness.dogCloseImage.alt, '方块村民');
+  assert.equal(harness.dogOpenImage.src, 'Image/villager_open_mouth.png');
+  assert.equal(
+    harness.notices.length,
+    0,
+    'villager must remain locally selectable when Toy cloud is unavailable'
+  );
   await harness.context.handleSfxOptionClick(option(harness, 'hajimi'));
   assert.equal(harness.context.selectedSfxId, 'hajimi');
   assert.equal(option(harness, 'hajimi').classList.contains('is-active'), true);
@@ -1029,6 +1173,56 @@ for (const [settingName, defaultChecked] of [
   const setup = makeToy();
   const harness = makeHarness(setup.toy);
   await initialize(harness);
+  setup.log.length = 0;
+  await harness.context.handleSfxOptionClick(option(harness, 'villager'));
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  assert.deepEqual(setup.log, ['set:dagou_villager_new_seen_v1']);
+  assert.equal(setup.storage.dagou_villager_new_seen_v1, '1');
+  assert.equal(harness.context.selectedSfxId, 'villager');
+  assert.equal(option(harness, 'villager').classList.contains('is-active'), true);
+  assert.equal(option(harness, 'villager').classList.contains('is-locked'), false);
+  assert.equal(option(harness, 'villager').classList.contains('is-new-hidden'), true);
+  assert.equal(
+    option(harness, 'villager').attributes.get('aria-checked'),
+    'true'
+  );
+  assert.equal(harness.context.toyCloudState.newSeen.villager, true);
+  assert.equal(harness.context.toyCloudState.locallyChanged.villager, true);
+  assert.equal(harness.dogCloseImage.src, 'Image/villager_close_mouth.png');
+  assert.equal(harness.dogOpenImage.src, 'Image/villager_open_mouth.png');
+  assert.equal(harness.context.unlockConfirmOpen, false);
+  assert.equal(
+    option(harness, 'dingdong').classList.contains('is-locked'),
+    true,
+    'selecting free villager must not alter the Dingdong unlock'
+  );
+}
+
+{
+  const setup = makeToy({ setError: new Error('villager NEW write failed') });
+  const harness = makeHarness(setup.toy);
+  await initialize(harness);
+  setup.log.length = 0;
+  await harness.context.handleSfxOptionClick(option(harness, 'villager'));
+  await new Promise(resolve => setTimeout(resolve, 0));
+
+  assert.deepEqual(setup.log, ['set:dagou_villager_new_seen_v1']);
+  assert.equal(setup.storage.dagou_villager_new_seen_v1, undefined);
+  assert.equal(harness.context.selectedSfxId, 'villager');
+  assert.equal(harness.context.toyCloudState.newSeen.villager, true);
+  assert.equal(harness.context.toyCloudState.locallyChanged.villager, true);
+  assert.equal(harness.context.toyCloudState.cloudReadable, false);
+  assert.equal(option(harness, 'villager').classList.contains('is-active'), true);
+  assert.equal(option(harness, 'villager').classList.contains('is-locked'), false);
+  assert.equal(option(harness, 'villager').classList.contains('is-new-hidden'), true);
+  assert.match(harness.notices.at(-1).message, /状态保存失败/);
+}
+
+{
+  const setup = makeToy();
+  const harness = makeHarness(setup.toy);
+  await initialize(harness);
   harness.context.settingsOpen = true;
   harness.context.settingsOverlay.inert = false;
   setup.log.length = 0;
@@ -1237,11 +1431,16 @@ assert.match(
   assert.equal(harness.context.topControls.classList.contains('has-update-dot'), false);
   harness.context.settingsOpen = true;
   harness.context.closeSettings();
+  await new Promise(resolve => setTimeout(resolve, 0));
   assert.equal(option(harness, 'dingdong').classList.contains('is-new-hidden'), true);
   assert.equal(
     harness.hajimiSkinEmperor.classList.contains('is-new-hidden'),
     true
   );
+  assert.equal(option(harness, 'villager').classList.contains('is-new-hidden'), true);
+  assert.equal(harness.context.toyCloudState.newSeen.villager, true);
+  assert.equal(harness.context.toyCloudState.locallyChanged.villager, true);
+  assert.equal(setup.storage.dagou_villager_new_seen_v1, '1');
 }
 
 const stagePointerStart = mainSource.indexOf("stage.addEventListener('pointerdown'");
@@ -1254,7 +1453,8 @@ assert.doesNotMatch(
 );
 
 console.log('Toy cloud unlock flow verified:');
-console.log('- Hajimi original is the default and freely switches with Dagou');
+console.log('- Hajimi original is the default and freely switches with Dagou or Villager');
+console.log('- Villager is always free and has an independent cloud-backed NEW state');
 console.log('- the Hajimi sound card never shows a lock; the lock lives on the emperor skin chip');
 console.log('- only Dingdong and the dedicated emperor skin chip start locked');
 console.log('- the settings hint arrow appears and disappears together with the red dot');

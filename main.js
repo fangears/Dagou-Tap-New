@@ -30,7 +30,7 @@ const DEFAULT_PERFORMANCE_SETTINGS = Object.freeze({
 let ctx = null;           // AudioContext
 let master = null;        // 总线增益
 let bgmBus = null;        // 循环音乐总线
-let sfxBus = null;        // 狗叫音效总线
+let sfxBus = null;        // 角色音效总线
 let noiseBuf = null;      // 白噪声（鼓组用）
 let started = false;
 let bgmMuted = false;
@@ -52,6 +52,11 @@ const SFX_SAMPLE_SETS = Object.freeze({
     gou: 'dingdongji_dong',
     jiao: 'dingdongji_ji',
   }),
+  villager: Object.freeze({
+    da: 'villager_hm',
+    gou: 'villager_ha',
+    jiao: 'villager_hmmm',
+  }),
 });
 const CHARACTER_IMAGE_SETS = Object.freeze({
   dagou: Object.freeze({
@@ -68,6 +73,11 @@ const CHARACTER_IMAGE_SETS = Object.freeze({
     close: 'Image/maodie_close_mouth.png',
     open: 'Image/maodie_open_mouth.png',
     alt: '哈基米',
+  }),
+  villager: Object.freeze({
+    close: 'Image/villager_close_mouth.png',
+    open: 'Image/villager_open_mouth.png',
+    alt: '方块村民',
   }),
 });
 const HAJIMI_ATLAS_URL =
@@ -129,6 +139,13 @@ const SUSTAIN_REGIONS = {
     wrapBlend: 0.040, textureDuration: 11.83, seed: 0.53,
     preferFrameEntry: true,
   },
+  villager_hmmm: {
+    enabled: true,
+    regionStart: 0.220, regionEnd: 0.520,
+    frame: 0.080, overlap: 0.040, search: 0.010,
+    wrapBlend: 0.030, textureDuration: 12.23, seed: 0.61,
+    preferFrameEntry: true,
+  },
 };
 const SUSTAIN_CLAIM_LEAD = 0.008; // 提前声明长音，避免多指延音短暂重叠
 const RELEASE_SCHEDULE_LEAD = 0.006;
@@ -148,15 +165,24 @@ let barkPop = 0;          // 叫弹跳的当前量 0..1（欠阻尼弹簧，可�
 let barkPopVel = 0;       // 弹簧速度（每次触发新声音时施加冲量）
 const BARK_KICK = 5.2;    // 单次触发给弹簧的冲量（果断起跳）
 const BARK_KICK_MAX = 9;  // 连打时冲量累积上限，防止爆炸
+const VILLAGER_COMBO_RESET_MS = 1200;
+const VILLAGER_PARTICLE_COUNT = 8;
 let holding = false;      // 是否正在长按延音（驱动 Q 弹成长 / 变红 / 抖动）
 let holdLevel = 0;        // 长按累积程度 0..1（缓慢增长、松手快速回落）
 let jellyScale = 1;       // 果冻层当前缩放（欠阻尼弹簧，带 Q 弹过冲）
 let jellyVel = 0;         // 弹簧速度
+let villagerHitCombo = 0;
+let villagerHitDirection = 1;
+let villagerHitStrength = 0;
+let villagerHitResetTimer = 0;
+let villagerHitFadeTimer = 0;
+let villagerHitGeneration = 0;
 let lastTick = 0;         // 上一帧时间（求 dt 用）
 const INPUT_LOOKAHEAD = 0.12;
 const INPUT_QUEUE_LOOKAHEAD = 0.03;
 const inputQueue = [];     // 滑动经过的分区按进入顺序排到连续八分音符
 const inputVisualTimers = new Set();
+let inputVisualGeneration = 0;
 let inputSerial = 0;
 let lastCommittedInputTime = -Infinity;
 const pointers = new Map();// pointerId -> { zone, voice, pendingEntryId, lastX, lastY }
@@ -172,6 +198,7 @@ const TOY_CLOUD_KEYS = Object.freeze({
   settingsSeen: 'dagou_settings_seen_v1',
   dingdongNewSeen: 'dagou_dingdong_new_seen_v1',
   hajimiNewSeen: 'dagou_hajimi_new_seen_v1',
+  villagerNewSeen: 'dagou_villager_new_seen_v1',
   pianoMode: 'dagou_piano_mode_v1',
   octaveSwitching: 'dagou_octave_switching_v1',
   pianoOctaveStart: 'dagou_piano_octave_start_v1',
@@ -187,6 +214,19 @@ const TOY_REQUIRED_ABILITIES = Object.freeze([
 ]);
 const VIDEO_UNLOCK_ITEM_IDS = new Set(['dingdong', 'hajimi']);
 const LOCKED_SFX_IDS = new Set(['dingdong']);
+const SFX_LABELS = Object.freeze({
+  dagou: '大狗叫',
+  dingdong: '叮咚鸡',
+  hajimi: '哈基米',
+  villager: '方块村民',
+});
+const NEW_ITEM_CLOUD_KEYS = Object.freeze({
+  dingdong: TOY_CLOUD_KEYS.dingdongNewSeen,
+  hajimi: TOY_CLOUD_KEYS.hajimiNewSeen,
+  villager: TOY_CLOUD_KEYS.villagerNewSeen,
+});
+const NEW_ITEM_IDS = new Set(Object.keys(NEW_ITEM_CLOUD_KEYS));
+const SFX_NEW_ITEM_IDS = new Set(['dingdong', 'villager']);
 const DEBUG_UNLOCK_SFX = false; // 临时调试：发布前改回 false，恢复 Toy 云端锁定。
 let controlsIdleTimer = 0;
 let navigationMuted = false;
@@ -202,6 +242,7 @@ try {
 const stage     = document.getElementById('stage');
 const fxCanvas  = document.getElementById('fx');
 const dogEl     = document.getElementById('dog');
+const dogHit    = document.getElementById('dog-hit');
 const dogInner  = document.getElementById('dog-inner');
 const dogJelly  = document.getElementById('dog-jelly');
 const dogCloseImage = document.getElementById('dog-close');
@@ -209,6 +250,8 @@ const dogOpenImage = document.getElementById('dog-open');
 const dogAnimationCanvas = document.getElementById('dog-animation');
 const dogAnimationAtlas = document.getElementById('dog-animation-atlas');
 const dogAnimation2d = dogAnimationCanvas.getContext('2d', { alpha: true });
+const villagerHitParticles = document.getElementById('villager-hit-particles');
+const villagerHitComboEl = document.getElementById('villager-hit-combo');
 const overlay   = document.getElementById('overlay');
 const keyGrid   = document.getElementById('key-grid');
 const flashLayer = document.getElementById('zoneflash');
@@ -542,11 +585,13 @@ const toyCloudState = {
   newSeen: {
     dingdong: false,
     hajimi: false,
+    villager: false,
   },
   locallyChanged: {
     settingsSeen: false,
     dingdong: false,
     hajimi: false,
+    villager: false,
   },
 };
 const PERFORMANCE_SETTING_KEYS = Object.freeze({
@@ -771,9 +816,14 @@ function renderToyCloudState() {
     const locked = isCloudLockedOption && !toyCloudState.sfxUnlocked;
     option.classList.toggle('is-locked', locked);
 
-    if (VIDEO_UNLOCK_ITEM_IDS.has(sfxId)) {
-      const label = sfxId === 'dingdong' ? '叮咚鸡' : '哈基米';
-      option.setAttribute('aria-label', locked ? `${label}，未解锁` : label);
+    const label = SFX_LABELS[sfxId] ?? sfxId;
+    option.setAttribute(
+      'aria-label',
+      locked
+        ? `${label}，未解锁`
+        : (selectedSfxId === sfxId ? `${label}音效已启用` : label)
+    );
+    if (NEW_ITEM_IDS.has(sfxId)) {
       option.classList.toggle('is-new-hidden', toyCloudState.newSeen[sfxId]);
     }
   }
@@ -839,13 +889,9 @@ async function initializeToyCloudState() {
       toyCloudState.settingsSeen =
         cloud[TOY_CLOUD_KEYS.settingsSeen] === '1';
     }
-    if (!toyCloudState.locallyChanged.dingdong) {
-      toyCloudState.newSeen.dingdong =
-        cloud[TOY_CLOUD_KEYS.dingdongNewSeen] === '1';
-    }
-    if (!toyCloudState.locallyChanged.hajimi) {
-      toyCloudState.newSeen.hajimi =
-        cloud[TOY_CLOUD_KEYS.hajimiNewSeen] === '1';
+    for (const [itemId, cloudKey] of Object.entries(NEW_ITEM_CLOUD_KEYS)) {
+      if (toyCloudState.locallyChanged[itemId]) continue;
+      toyCloudState.newSeen[itemId] = cloud[cloudKey] === '1';
     }
   } catch (error) {
     // 读取不可用时，三个演奏设置也必须整体保持默认值。
@@ -885,26 +931,21 @@ function markSettingsSeen() {
 }
 
 function markSfxNewSeen(sfxId) {
-  if (!VIDEO_UNLOCK_ITEM_IDS.has(sfxId) || toyCloudState.newSeen[sfxId]) return;
+  const cloudKey = NEW_ITEM_CLOUD_KEYS[sfxId];
+  if (!cloudKey || toyCloudState.newSeen[sfxId]) return;
   toyCloudState.newSeen[sfxId] = true;
   toyCloudState.locallyChanged[sfxId] = true;
   renderToyCloudState();
-  const key = sfxId === 'dingdong'
-    ? TOY_CLOUD_KEYS.dingdongNewSeen
-    : TOY_CLOUD_KEYS.hajimiNewSeen;
-  persistSeenState({ [key]: '1' });
+  persistSeenState({ [cloudKey]: '1' });
 }
 
 function markAllSfxNewSeen() {
   const items = {};
-  for (const sfxId of VIDEO_UNLOCK_ITEM_IDS) {
+  for (const sfxId of NEW_ITEM_IDS) {
     if (toyCloudState.newSeen[sfxId]) continue;
     toyCloudState.newSeen[sfxId] = true;
     toyCloudState.locallyChanged[sfxId] = true;
-    const key = sfxId === 'dingdong'
-      ? TOY_CLOUD_KEYS.dingdongNewSeen
-      : TOY_CLOUD_KEYS.hajimiNewSeen;
-    items[key] = '1';
+    items[NEW_ITEM_CLOUD_KEYS[sfxId]] = '1';
   }
 
   if (Object.keys(items).length === 0) return;
@@ -1102,9 +1143,18 @@ function setHajimiSkin(useEmperor) {
 }
 
 function selectSfxOption(option) {
-  selectedSfxId = SFX_SAMPLE_SETS[option.dataset.sfx]
+  const nextSfxId = SFX_SAMPLE_SETS[option.dataset.sfx]
     ? option.dataset.sfx
     : 'hajimi';
+  if (nextSfxId === selectedSfxId) {
+    renderToyCloudState();
+    return;
+  }
+
+  settleActivePerformanceInput();
+  for (const voice of [...liveVoices]) forceStopVoice(voice);
+  resetVillagerHitState();
+  selectedSfxId = nextSfxId;
   hajimiAnimationEnabled = false;
   const characterImages = CHARACTER_IMAGE_SETS[selectedSfxId]
     ?? CHARACTER_IMAGE_SETS.dagou;
@@ -1118,17 +1168,18 @@ function selectSfxOption(option) {
     other.setAttribute('aria-checked', String(selected));
   }
   applyHajimiAnimationVisibility();
+  renderToyCloudState();
 }
 
 async function handleSfxOptionClick(option) {
   const sfxId = option.dataset.sfx;
+  if (SFX_NEW_ITEM_IDS.has(sfxId)) markSfxNewSeen(sfxId);
   const requiresVideoUnlock = LOCKED_SFX_IDS.has(sfxId);
   if (!requiresVideoUnlock) {
     selectSfxOption(option);
     return;
   }
 
-  markSfxNewSeen(sfxId);
   if (toyCloudState.sfxUnlocked) {
     selectSfxOption(option);
     return;
@@ -1363,7 +1414,7 @@ window.addEventListener('keydown', (event) => {
 authorHomeButton.addEventListener('click', handleAuthorHomeClick);
 videoCard.addEventListener('click', openFeaturedVideo);
 
-/* 三套音效都保留 da / gou / jiao 的语义位置，只替换实际播放采样。 */
+/* 四套音效都保留 da / gou / jiao 的语义位置，只替换实际播放采样。 */
 for (const option of sfxOptions) {
   option.addEventListener('click', () => {
     void handleSfxOptionClick(option);
@@ -1411,6 +1462,9 @@ const BARK_SOURCE_MIDI = Object.freeze({
   dingdongji_ding: 68.72369809072657,
   dingdongji_dong: 68.20736701647688,
   dingdongji_ji: 69.48535473104747,
+  villager_hm: 68.86757909447432,
+  villager_ha: 68.75589316791971,
+  villager_hmmm: 69.00081425407193,
 });
 
 // ha_new 的 A5 跨度较大；普通模式使用全四档复测后的 minimax 补偿锚点。
@@ -1439,8 +1493,8 @@ const BARK_PIANO_SOURCE_MIDI = Object.freeze({
   }),
 });
 
-// 固定 A 小调五声音阶（A–C–D–E–G）。大狗叫与叮咚鸡的第三档是最接近
-// 原声的音；哈基米移除旧最低档、将原前三档后移，因此第四档最接近原声。
+// 固定 A 小调五声音阶（A–C–D–E–G）。大狗叫、叮咚鸡与方块村民的第三档
+// 最接近原声；哈基米移除旧最低档、将原前三档后移，因此第四档最接近原声。
 const BARK_TARGET_MIDI = Object.freeze({
   da: Object.freeze([79, 76, 72, 69]),    // G5, E5, C5, A4
   gou: Object.freeze([72, 69, 67, 64]),   // C5, A4, G4, E4
@@ -1451,6 +1505,9 @@ const BARK_TARGET_MIDI = Object.freeze({
   dingdongji_ding: Object.freeze([74, 72, 69, 67]), // D5, C5, A4, G4
   dingdongji_dong: Object.freeze([74, 72, 69, 67]), // D5, C5, A4, G4
   dingdongji_ji: Object.freeze([74, 72, 69, 67]),   // D5, C5, A4, G4
+  villager_hm: Object.freeze([74, 72, 69, 67]),     // D5, C5, A4, G4
+  villager_ha: Object.freeze([74, 72, 69, 67]),     // D5, C5, A4, G4
+  villager_hmmm: Object.freeze([74, 72, 69, 67]),   // D5, C5, A4, G4
 });
 
 // 20 ms 有声帧门限 RMS，以 da.wav 为响度基准。Web Audio 使用浮点链路，
@@ -1465,6 +1522,9 @@ const SFX_SAMPLE_GAIN = Object.freeze({
   dingdongji_ding: 2.5889190244772604,
   dingdongji_dong: 2.3637451111911507,
   dingdongji_ji: 2.3501763429894065,
+  villager_hm: 0.9323404285136571,
+  villager_ha: 0.9923723668843711,
+  villager_hmmm: 0.8749070275355995,
 });
 
 // 钢琴模式按起始八度动态生成 C 大调白键；第八键以高音 C 闭合完整八度。
@@ -2104,7 +2164,8 @@ function isRetunableSustainVoice(voice) {
     (
       voice.name === 'jiao' ||
       voice.name === 'mi' ||
-      voice.name === 'dingdongji_ji'
+      voice.name === 'dingdongji_ji' ||
+      voice.name === 'villager_hmmm'
     ) &&
     voice.mode === 'sustain' &&
     voice.held &&
@@ -3036,6 +3097,109 @@ function flashZone(zi) {
   flashLayer.appendChild(el);
 }
 
+function clearVillagerHitParticles() {
+  villagerHitParticles.replaceChildren();
+}
+
+function resetVillagerHitState() {
+  villagerHitGeneration++;
+  clearTimeout(villagerHitResetTimer);
+  clearTimeout(villagerHitFadeTimer);
+  villagerHitResetTimer = 0;
+  villagerHitFadeTimer = 0;
+  villagerHitCombo = 0;
+  villagerHitStrength = 0;
+  dogHit.classList.remove('is-villager-hit', 'is-hit-from-right');
+  dogHit.style.removeProperty('--villager-hit-offset');
+  dogHit.style.removeProperty('--villager-hit-rebound');
+  villagerHitComboEl.classList.remove('is-visible', 'is-fading');
+  villagerHitComboEl.hidden = true;
+  villagerHitComboEl.textContent = 'HIT ×0';
+  clearVillagerHitParticles();
+}
+
+function spawnVillagerHitParticles(direction, strength) {
+  if (reduceUiMotion) return;
+  const { width, height } = getStageMetrics();
+  const originX = width * 0.5;
+  const originY = height * 0.43;
+  const colorPalette = ['#9b6a3c', '#b88a58', '#6f7b48', '#d0b085'];
+
+  for (let index = 0; index < VILLAGER_PARTICLE_COUNT; index++) {
+    const particle = document.createElement('span');
+    particle.className = 'villager-hit-particle';
+    const spread = (index - (VILLAGER_PARTICLE_COUNT - 1) / 2) * 8;
+    const jitter = (Math.random() - 0.5) * 18;
+    const dx = direction * (24 + strength * 2 + Math.random() * 26) + spread;
+    const dy = -(44 + Math.random() * 58) + jitter;
+    particle.style.setProperty('--villager-particle-x', `${originX}px`);
+    particle.style.setProperty('--villager-particle-y', `${originY}px`);
+    particle.style.setProperty('--villager-particle-dx', `${dx.toFixed(1)}px`);
+    particle.style.setProperty('--villager-particle-dy', `${dy.toFixed(1)}px`);
+    particle.style.setProperty(
+      '--villager-particle-size',
+      `${Math.round(7 + Math.random() * 7)}px`
+    );
+    particle.style.setProperty(
+      '--villager-particle-rotate',
+      `${Math.round(direction * (70 + Math.random() * 150))}deg`
+    );
+    particle.style.setProperty('--villager-particle-delay', `${index * 9}ms`);
+    particle.style.setProperty(
+      '--villager-particle-color',
+      colorPalette[index % colorPalette.length]
+    );
+    particle.addEventListener('animationend', () => particle.remove(), { once: true });
+    villagerHitParticles.appendChild(particle);
+  }
+}
+
+function triggerVillagerHit(zi, sfxId) {
+  if (sfxId !== 'villager' || selectedSfxId !== 'villager') return;
+
+  clearTimeout(villagerHitResetTimer);
+  clearTimeout(villagerHitFadeTimer);
+  villagerHitCombo++;
+  villagerHitStrength = Math.min(villagerHitCombo, 8);
+  const column = zi % cols;
+  const relativeColumn = (column + 0.5) / cols;
+  villagerHitDirection = relativeColumn === 0.5
+    ? (villagerHitCombo % 2 === 0 ? -1 : 1)
+    : (relativeColumn < 0.5 ? 1 : -1);
+  const generation = ++villagerHitGeneration;
+
+  const offset = 10 + villagerHitStrength * 1.25;
+  dogHit.classList.remove('is-villager-hit', 'is-hit-from-right');
+  if (villagerHitDirection < 0) dogHit.classList.add('is-hit-from-right');
+  dogHit.style.setProperty('--villager-hit-offset', `${villagerHitDirection * offset}px`);
+  dogHit.style.setProperty(
+    '--villager-hit-rebound',
+    `${-villagerHitDirection * Math.min(4, 1.5 + villagerHitStrength * 0.25)}px`
+  );
+  // Restart the short CSS animation even during rapid eighth-note hits.
+  void dogHit.offsetWidth;
+  dogHit.classList.add('is-villager-hit');
+
+  villagerHitComboEl.hidden = false;
+  villagerHitComboEl.classList.remove('is-fading');
+  villagerHitComboEl.classList.add('is-visible');
+  villagerHitComboEl.textContent = `HIT ×${villagerHitCombo}`;
+  spawnVillagerHitParticles(villagerHitDirection, villagerHitStrength);
+
+  villagerHitResetTimer = setTimeout(() => {
+    if (generation !== villagerHitGeneration) return;
+    villagerHitCombo = 0;
+    villagerHitComboEl.classList.remove('is-visible');
+    villagerHitComboEl.classList.add('is-fading');
+    villagerHitFadeTimer = setTimeout(() => {
+      if (generation !== villagerHitGeneration) return;
+      villagerHitComboEl.hidden = true;
+      villagerHitComboEl.classList.remove('is-fading');
+      villagerHitComboEl.textContent = 'HIT ×0';
+    }, 180);
+  }, VILLAGER_COMBO_RESET_MS);
+}
+
 function reflowQueuedInputTimes() {
   if (!performanceSettings.rhythmSnap) {
     const now = ctx?.currentTime ?? 0;
@@ -3079,6 +3243,7 @@ function enqueueActivation(zi, pointerId) {
     zone: zi,
     sample: z.sample,
     audioSample: resolveSfxSample(z.sample),
+    sfxId: selectedSfxId,
     pitchTier: z.pitchTier,
     targetMidi: z.targetMidi,
     pianoOctaveStart: z.pianoOctaveStart,
@@ -3101,6 +3266,7 @@ function enqueueSustainRetune(zi, pointerId, voice) {
     zone: zi,
     sample: z.sample,
     audioSample: voice?.name ?? resolveSfxSample(z.sample),
+    sfxId: selectedSfxId,
     pitchTier: z.pitchTier,
     targetMidi: z.targetMidi,
     pianoOctaveStart: z.pianoOctaveStart,
@@ -3122,13 +3288,16 @@ function commitUnsnappedInput(entry) {
   playQueuedInput(entry);
 }
 
-function scheduleActivationVisual(zi, when) {
+function scheduleActivationVisual(zi, when, sfxId = selectedSfxId) {
   const waitMs = Math.max(0, (when - ctx.currentTime) * 1000);
+  const visualGeneration = inputVisualGeneration;
   const timer = setTimeout(() => {
     inputVisualTimers.delete(timer);
+    if (visualGeneration !== inputVisualGeneration) return;
     openMouth(280);
     barkPopVel = Math.min(barkPopVel + BARK_KICK, BARK_KICK_MAX);
     spawnEffect(zi, ctx.currentTime);
+    triggerVillagerHit(zi, sfxId);
   }, waitMs);
   inputVisualTimers.add(timer);
 }
@@ -3143,7 +3312,7 @@ function playQueuedInput(entry) {
   );
   if (entry.kind === 'sustain-retune') {
     if (retuneSustainVoice(entry.voice, rate, entry.when)) {
-      scheduleActivationVisual(entry.zone, entry.when);
+      scheduleActivationVisual(entry.zone, entry.when, entry.sfxId);
     }
     return;
   }
@@ -3162,7 +3331,7 @@ function playQueuedInput(entry) {
     // 已滑过或已松手的 jiao 只保留短音，不进入未来的长音循环。
     releaseVoice(voice, true);
   }
-  scheduleActivationVisual(entry.zone, entry.when);
+  scheduleActivationVisual(entry.zone, entry.when, entry.sfxId);
 }
 
 function scheduleQueuedInputs(horizon) {
@@ -3181,6 +3350,7 @@ function cancelQueuedInputs(pointerId) {
 }
 
 function clearInputVisualTimers() {
+  inputVisualGeneration++;
   for (const timer of inputVisualTimers) clearTimeout(timer);
   inputVisualTimers.clear();
 }
@@ -3418,6 +3588,7 @@ window.addEventListener('keyup', handlePianoKeyUp);
 window.addEventListener('blur', () => {
   inputQueue.length = 0;
   clearInputVisualTimers();
+  resetVillagerHitState();
   pointers.clear();
   for (const voice of [...liveVoices]) forceStopVoice(voice);
 });

@@ -4,38 +4,45 @@
 
 `analyze_pitch.py` 会：
 
-1. 使用逐帧 YIN 检测大狗叫 `da / gou / jiao`、哈基米 `ha / ji / mi` 与叮咚鸡 `dingdongji_ding / dingdongji_dong / dingdongji_ji`；
+1. 使用逐帧 YIN 检测大狗叫 `da / gou / jiao`、哈基米 `ha / ji / mi`、叮咚鸡 `dingdongji_ding / dingdongji_dong / dingdongji_ji` 与方块村民 `villager_hm / villager_ha / villager_hmmm`；
 2. 从高能量、高置信度有声帧计算参考基频；
 3. 为每个按键生成固定的 A 小调五声音阶目标；
-4. 大狗叫/叮咚鸡第三档、哈基米第四档使用最接近对应原声的五声音阶音；
-5. 为钢琴模式生成从 C3、C4、C5、C6 起始的四组白键目标，共复测九段音频 × 四档 × 八键 = 288 个映射；
-6. 以 `da.wav` 的 20 ms 有声帧 RMS 为响度基准，计算九段音频的独立增益；
+4. 大狗叫/叮咚鸡/方块村民第三档、哈基米第四档使用最接近对应原声的五声音阶音；
+5. 为钢琴模式生成从 C3、C4、C5、C6 起始的四组白键目标，共复测十二段音频 × 四档 × 八键 = 384 个映射；
+6. 以 `da.wav` 的 20 ms 有声帧 RMS 为响度基准，计算十二段音频的独立增益；
 7. 对普通模式与钢琴模式的所有档位实际重采样后重新检测音高与校准后响度；
 8. 将报告和可选试听 WAV 写入 `tools/tmp/`。
 
 运行：
 
 ```powershell
+python tools/synthesize_villager_sfx.py
 python tools/analyze_pitch.py --write-wavs
 python tools/find_piano_minimax.py
 node tools/build_audio_data.mjs
 node tools/verify_runtime_mapping.mjs
 node tools/verify_interaction_queue.mjs
+node tools/verify_villager_hit_flow.mjs
 node tools/verify_toy_cloud_flow.mjs
 ```
 
-第一条命令会直接分析网页实际使用的音频，其中哈基米运行时键 `ha / ji / mi`
-分别读取 `ha_new.wav / ji_new.wav / mi_new.wav`。读取器同时支持 16 位 PCM 和
-32 位浮点 WAV。除音高与响度外，报告还验证 `mi_new` 的长音区音高、响度和
+`synthesize_villager_sfx.py` 使用确定性的声带谐波、鼻腔共振、噪声起音与包络，
+生成三段原创方块村民音效；相同脚本与参数会得到相同的 48 kHz 单声道 PCM16 WAV。
+
+`analyze_pitch.py` 会直接分析网页实际使用的音频，其中哈基米运行时键 `ha / ji / mi`
+分别读取 `ha_new.wav / ji_new.wav / mi_new.wav`，方块村民读取三段 48 kHz
+单声道 16 位 PCM WAV。读取器同时支持 16 位 PCM 和 32 位浮点 WAV。除音高与
+响度外，报告还验证 `mi_new` 与 `villager_hmmm.wav` 的长音区音高、响度和
 检测置信度是否足够稳定。
 
-`build_audio_data.mjs` 会从 `audio/` 重建网页实际使用的九段 base64 音频包。
+`build_audio_data.mjs` 会从 `audio/` 重建网页实际使用的十二段 base64 音频包。
 
 `verify_runtime_mapping.mjs` 会直接提取并执行 `main.js` 中的实际映射函数，对照分析报告检查
-三套音效的全部固定按键与独立响度增益，并确认各音色指定档位使用最接近原声
+四套音效的全部固定按键与独立响度增益，并确认各音色指定档位使用最接近原声
 的 A 小调五声音阶音、哈基米最低档已被新增高音替换；同时验证钢琴模式的横屏 `8 × 3`、竖屏 `3 × 8` 布局
 与 C3–C7 四档动态目标音、关闭八度切换时回退 C4–C5 的行为，以及运行时 `mi`
-长音参数与稳定区分析完全一致。分析器仍以 25 cents / 1 dB 为严格告警线；当前直接
+与 `villager_hmmm` 长音参数和各自稳定区分析完全一致。分析器仍以 25 cents /
+1 dB 为严格告警线；当前直接
 变调方案在最高档会明确报告 `mi/C6`、`dingdongji_ji/C6` 的 YIN 超限和
 `gou/C6/A6` 的 1.176 dB 响度超限，运行时验证只允许这些已记录且有上限的例外。
 
@@ -47,6 +54,10 @@ node tools/verify_toy_cloud_flow.mjs
 排队，确认 `da / gou / jiao` 三个语义音节各自只保留最新的一个待调度项目，以及已进入
 长音的第三音节换调也进入该队列，只在当前纹理上切换播放速率而不重新播放
 开头；关闭节奏吸附后则验证每次输入都按实际按下时间立即发声且不去重。
+
+`verify_villager_hit_flow.mjs` 会直接提取运行时受击函数，以可控计时器验证节拍点触发、
+1.2 秒连击重置、过期回调隔离、八粒子与方向、视觉强度封顶、减少动态效果、静音反馈、
+音色切换/失焦清理，以及长音换调成功后才触发受击视觉。
 
 `verify_toy_cloud_flow.mjs` 会用模拟 Toy SDK 验证站内身份检测、云状态恢复、锁定音效提示、
 红点与 `NEW` 持久化、「先写入解锁状态、再跳转视频」的严格调用顺序，

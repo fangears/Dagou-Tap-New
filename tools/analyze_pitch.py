@@ -33,6 +33,7 @@ SFX_SAMPLE_SETS = {
     "dagou": ("da", "gou", "jiao"),
     "hajimi": ("ha", "ji", "mi"),
     "dingdong": ("dingdongji_ding", "dingdongji_dong", "dingdongji_ji"),
+    "villager": ("villager_hm", "villager_ha", "villager_hmmm"),
 }
 SAMPLE_NAMES = tuple(
     sample_name
@@ -60,6 +61,9 @@ FIXED_TARGET_MIDI = {
     "dingdongji_ding": (74, 72, 69, 67),  # D5, C5, A4, G4
     "dingdongji_dong": (74, 72, 69, 67),  # D5, C5, A4, G4
     "dingdongji_ji": (74, 72, 69, 67),    # D5, C5, A4, G4
+    "villager_hm": (74, 72, 69, 67),       # D5, C5, A4, G4
+    "villager_ha": (74, 72, 69, 67),       # D5, C5, A4, G4
+    "villager_hmmm": (74, 72, 69, 67),     # D5, C5, A4, G4
 }
 PIANO_OCTAVE_STARTS = (3, 4, 5, 6)
 PIANO_SCALE_INTERVALS = (0, 2, 4, 5, 7, 9, 11, 12)
@@ -101,7 +105,18 @@ SUSTAIN_REGION_CONFIG = {
         "textureDuration": 12.11,
         "seed": 0.29,
         "preferFrameEntry": True,
-    }
+    },
+    "villager_hmmm": {
+        "regionStart": 0.220,
+        "regionEnd": 0.520,
+        "frame": 0.080,
+        "overlap": 0.040,
+        "search": 0.010,
+        "wrapBlend": 0.030,
+        "textureDuration": 12.23,
+        "seed": 0.61,
+        "preferFrameEntry": True,
+    },
 }
 
 

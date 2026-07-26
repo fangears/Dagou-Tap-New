@@ -226,7 +226,7 @@
     100% { opacity: 0; }
   }
 
-  /* 大狗 */
+  /* 角色：节拍、受击、叫声弹簧与长按果冻各占一层，避免 transform/filter 互相覆盖。 */
   #dog {
     position: absolute;
     inset: 0;
@@ -238,9 +238,37 @@
     will-change: transform;
     transform-origin: 50% 62%;   /* 节拍压缩围绕狗身体中下部进行 */
   }
-  #dog-inner {
+  #dog-hit {
+    --villager-hit-offset: 14px;
+    --villager-hit-rebound: -2px;
     position: relative;
     width: var(--scene-unit);
+    will-change: transform, filter;
+    transform-origin: 50% 62%;
+  }
+  #dog-hit.is-hit-from-right {
+    --villager-hit-offset: -14px;
+    --villager-hit-rebound: 2px;
+  }
+  #dog-hit.is-villager-hit {
+    animation:
+      villagerHitKnockback 180ms cubic-bezier(.18, .78, .28, 1) both,
+      villagerHitFlash 160ms ease-out both;
+  }
+  @keyframes villagerHitKnockback {
+    0%   { transform: translateX(0); }
+    24%  { transform: translateX(var(--villager-hit-offset)); }
+    62%  { transform: translateX(var(--villager-hit-rebound)); }
+    100% { transform: translateX(0); }
+  }
+  @keyframes villagerHitFlash {
+    0%   { filter: none; }
+    18%  { filter: sepia(.25) saturate(1.9) hue-rotate(316deg) brightness(1.12); }
+    100% { filter: none; }
+  }
+  #dog-inner {
+    position: relative;
+    width: 100%;
     will-change: transform;   /* 叫弹簧跳由 JS 逐帧驱动（无 CSS transition，保证果断跟手） */
   }
   /* 长按果冻层：transform / 变红滤镜全部由 JS 逐帧驱动（Q弹 + 高频抖动） */
@@ -293,6 +321,83 @@
   #dog-inner.is-hajimi.is-hajimi-animation #dog-animation {
     opacity: 1;
     visibility: visible;
+  }
+
+  /* 方块村民受击反馈：粒子和连击 HUD 位于舞台层，不跟随角色的 Q 弹滤镜。 */
+  #villager-hit-particles {
+    position: absolute;
+    inset: 0;
+    z-index: 7;
+    overflow: hidden;
+    pointer-events: none;
+  }
+  .villager-hit-particle {
+    position: absolute;
+    left: var(--villager-particle-x, 50%);
+    top: var(--villager-particle-y, 50%);
+    width: var(--villager-particle-size, 10px);
+    aspect-ratio: 1;
+    background: var(--villager-particle-color, #9b6a3c);
+    border: 1px solid rgba(91, 62, 36, .2);
+    box-shadow: inset -2px -2px 0 rgba(69, 45, 27, .14);
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(.7);
+    animation: villagerHitParticleFade 480ms cubic-bezier(.18, .68, .26, 1) forwards;
+    animation-delay: var(--villager-particle-delay, 0ms);
+    will-change: transform, opacity;
+  }
+  .villager-hit-particle:nth-child(4n + 2) {
+    background: var(--villager-particle-color, #b88a58);
+  }
+  .villager-hit-particle:nth-child(4n + 3) {
+    background: var(--villager-particle-color, #6f7b48);
+  }
+  .villager-hit-particle:nth-child(4n + 4) {
+    background: var(--villager-particle-color, #d0b085);
+  }
+  @keyframes villagerHitParticleFade {
+    0% {
+      opacity: 0;
+      transform: translate(-50%, -50%) scale(.7) rotate(0deg);
+    }
+    14% { opacity: .96; }
+    100% {
+      opacity: 0;
+      transform:
+        translate(
+          calc(-50% + var(--villager-particle-dx, 0px)),
+          calc(-50% + var(--villager-particle-dy, -64px))
+        )
+        scale(.18)
+        rotate(var(--villager-particle-rotate, 120deg));
+    }
+  }
+  #villager-hit-combo {
+    position: absolute;
+    left: 50%;
+    top: clamp(86px, 23vh, 210px);
+    z-index: 8;
+    padding: 7px 12px 6px;
+    color: #fffaf0;
+    background: rgba(255, 90, 95, .94);
+    border: 2px solid rgba(255, 250, 240, .88);
+    border-radius: 999px;
+    box-shadow: 0 7px 18px rgba(135, 72, 56, .22);
+    font: 900 clamp(13px, 2.8vmin, 19px)/1 "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    letter-spacing: .06em;
+    white-space: nowrap;
+    pointer-events: none;
+    opacity: 0;
+    transform: translate(-50%, 8px) scale(.9);
+    transition: opacity 150ms ease, transform 180ms cubic-bezier(.18, .78, .28, 1);
+  }
+  #villager-hit-combo.is-visible {
+    opacity: 1;
+    transform: translate(-50%, 0) scale(1);
+  }
+  #villager-hit-combo.is-fading {
+    opacity: 0;
+    transform: translate(-50%, -5px) scale(.96);
   }
 
   /* 顶部控制：互动时隐藏，闲置 2 秒后由 JS 淡入 */
@@ -928,9 +1033,10 @@
     outline-offset: 2px;
   }
 
-  /* 音效三选一：切角小卡，选中态描边变琥珀色 */
+  /* 音效四选一：切角小卡，选中态描边变琥珀色 */
   .sfx-options {
-    display: flex;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 10px;
   }
   .sfx-option {
@@ -938,7 +1044,7 @@
     --btn-fill: rgba(255, 255, 255, .6);
     position: relative;
     isolation: isolate;   /* 让 ::before 底色保持在描边之上、内容之下 */
-    flex: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -1048,6 +1154,16 @@
   .sfx-option:focus-visible {
     outline: 3px solid rgba(62, 123, 250, .38);
     outline-offset: 2px;
+  }
+  .minecraft-unofficial-note {
+    margin-top: 8px;
+    padding: 7px 9px;
+    color: rgba(111, 106, 99, .86);
+    background: rgba(135, 131, 126, .07);
+    border-left: 3px solid rgba(255, 180, 0, .58);
+    font-size: 9px;
+    font-weight: 550;
+    line-height: 1.5;
   }
 
   /* 哈基米形象切换：仅选中哈基米时展开的横向两档切角卡。
@@ -1293,8 +1409,18 @@
     outline-offset: 2px;
   }
   @media (prefers-reduced-motion: reduce) {
+    #dog-hit.is-villager-hit {
+      animation: villagerHitReducedFlash 120ms linear both;
+    }
+    .villager-hit-particle { display: none; }
+    #villager-hit-combo { transition: none; }
     #unlock-confirm-overlay,
     #unlock-confirm-dialog { transition: none; }
+  }
+  @keyframes villagerHitReducedFlash {
+    0%   { filter: none; }
+    35%  { filter: sepia(.12) saturate(1.22) hue-rotate(320deg) brightness(1.04); }
+    100% { filter: none; }
   }
 
   @media (max-width: 430px) {
@@ -1304,6 +1430,9 @@
     .settings-scroll { padding: 12px 13px 14px; }
     .author-avatar { width: 46px; height: 46px; }
     .author-id { font-size: 15px; }
+  }
+  @media (max-width: 360px) {
+    .sfx-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   }
 </style>
 </head>
@@ -1332,14 +1461,18 @@
     </div>
 
     <div id="dog">
-      <div id="dog-inner" class="is-hajimi">
-        <div id="dog-jelly">
-          <img id="dog-close" src="Image/maodie_close_mouth.png" alt="哈基米" draggable="false" />
-          <img id="dog-open" src="Image/maodie_open_mouth.png" alt="" draggable="false" />
-          <canvas id="dog-animation" width="360" height="514" role="img" aria-label="东海帝皇循环动画" aria-hidden="true"></canvas>
+      <div id="dog-hit">
+        <div id="dog-inner" class="is-hajimi">
+          <div id="dog-jelly">
+            <img id="dog-close" src="Image/maodie_close_mouth.png" alt="哈基米" draggable="false" />
+            <img id="dog-open" src="Image/maodie_open_mouth.png" alt="" draggable="false" />
+            <canvas id="dog-animation" width="360" height="514" role="img" aria-label="东海帝皇循环动画" aria-hidden="true"></canvas>
+          </div>
         </div>
       </div>
     </div>
+    <div id="villager-hit-particles" aria-hidden="true"></div>
+    <div id="villager-hit-combo" role="status" aria-live="polite" aria-atomic="true" hidden>HIT ×0</div>
     <img id="dog-animation-atlas" alt="" hidden decoding="async" fetchpriority="low" />
 
     <div id="top-controls" class="is-visible has-update-dot" aria-label="声音与导航控制">
@@ -1446,6 +1579,15 @@
                 </span>
                 <span class="sfx-name">哈基米</span>
               </button>
+              <button class="sfx-option" type="button" role="radio" aria-checked="false" aria-label="方块村民" data-sfx="villager">
+                <span class="sfx-status" aria-hidden="true">
+                  <span class="sfx-new">NEW</span>
+                </span>
+                <span class="sfx-icon">
+                  <img src="Image/villager_close_mouth.png" alt="" draggable="false" />
+                </span>
+                <span class="sfx-name">方块村民</span>
+              </button>
             </div>
             <div class="skin-switcher is-open" id="hajimi-skin-switcher" aria-hidden="false">
               <div class="skin-switcher-inner">
@@ -1472,6 +1614,9 @@
                 </div>
               </div>
             </div>
+            <p class="minecraft-unofficial-note">
+              非官方 Minecraft 内容，未获 Mojang 或 Microsoft 认可或关联。
+            </p>
           </section>
 
           <section class="settings-section" aria-label="演奏设置">
@@ -1537,7 +1682,7 @@
     </div>
   </div>
 
-  <script src="audio-data.js?v=20260721-hajimi-new"></script>
-  <script src="main.js?v=20260722-octave-switching"></script>
+  <script src="audio-data.js?v=20260726-villager-hit"></script>
+  <script src="main.js?v=20260726-villager-hit"></script>
 </body>
 </html>

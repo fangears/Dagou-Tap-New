@@ -432,6 +432,7 @@ vm.runInNewContext(
   let inputSerial = 0;
   const inputQueue = [];
   const performanceSettings = { rhythmSnap: true };
+  let selectedSfxId = 'hajimi';
   const pointers = new Map();
   const zones = [
     { sample: 'da', pitchTier: 0 },
@@ -552,6 +553,7 @@ assert.deepEqual(
       zone: 2,
       sample: 'jiao',
       audioSample: 'dingdongji_ji',
+      sfxId: 'hajimi',
       pitchTier: 0,
       voice: true,
       when: 1,

@@ -19,6 +19,7 @@ const sampleNames = [
   'da', 'gou', 'jiao',
   'ha', 'ji', 'mi',
   'dingdongji_ding', 'dingdongji_dong', 'dingdongji_ji',
+  'villager_hm', 'villager_ha', 'villager_hmmm',
 ];
 const runtimeSampleFiles = {
   da: 'da.wav',
@@ -30,6 +31,9 @@ const runtimeSampleFiles = {
   dingdongji_ding: 'dingdongji_ding.wav',
   dingdongji_dong: 'dingdongji_dong.wav',
   dingdongji_ji: 'dingdongji_ji.wav',
+  villager_hm: 'villager_hm.wav',
+  villager_ha: 'villager_ha.wav',
+  villager_hmmm: 'villager_hmmm.wav',
 };
 
 function extractDeclaration(pattern, label) {
@@ -171,25 +175,39 @@ const expectedSfxSamples = {
     gou: 'dingdongji_dong',
     jiao: 'dingdongji_ji',
   },
+  villager: {
+    da: 'villager_hm',
+    gou: 'villager_ha',
+    jiao: 'villager_hmmm',
+  },
 };
-const analysedMiSustain = report.sustain_regions?.mi;
-if (!analysedMiSustain?.config) {
-  throw new Error('Pitch analyzer report is missing the mi sustain-region audit');
-}
-for (const [key, expected] of Object.entries(analysedMiSustain.config)) {
-  if (mappingApi.sustainRegions.mi?.[key] !== expected) {
+const analysedSustainRegions = {
+  mi: report.sustain_regions?.mi,
+  villager_hmmm: report.sustain_regions?.villager_hmmm,
+};
+for (const [sample, analysedSustain] of Object.entries(analysedSustainRegions)) {
+  if (!analysedSustain?.config) {
     throw new Error(
-      `mi sustain ${key}: expected ${expected}, got ` +
-      `${mappingApi.sustainRegions.mi?.[key]}`,
+      `Pitch analyzer report is missing the ${sample} sustain-region audit`,
     );
   }
-}
-if (
-  analysedMiSustain.pitch_span_cents > 30 ||
-  analysedMiSustain.rms_span_db > 4 ||
-  analysedMiSustain.minimum_confidence < 0.8
-) {
-  throw new Error('mi sustain region is not stable enough for WSOLA looping');
+  for (const [key, expected] of Object.entries(analysedSustain.config)) {
+    if (mappingApi.sustainRegions[sample]?.[key] !== expected) {
+      throw new Error(
+        `${sample} sustain ${key}: expected ${expected}, got ` +
+        `${mappingApi.sustainRegions[sample]?.[key]}`,
+      );
+    }
+  }
+  if (
+    analysedSustain.pitch_span_cents > 30 ||
+    analysedSustain.rms_span_db > 4 ||
+    analysedSustain.minimum_confidence < 0.8
+  ) {
+    throw new Error(
+      `${sample} sustain region is not stable enough for WSOLA looping`,
+    );
+  }
 }
 for (const [sfxId, expectedSamples] of Object.entries(expectedSfxSamples)) {
   for (const [semanticSample, audioSample] of Object.entries(expectedSamples)) {
@@ -226,8 +244,8 @@ for (const sample of sampleNames) {
 }
 
 let checked = 0;
-if (!Array.isArray(report.mappings) || report.mappings.length !== 36) {
-  throw new Error('Pitch analyzer report must contain all 36 normal sample/tier mappings');
+if (!Array.isArray(report.mappings) || report.mappings.length !== 48) {
+  throw new Error('Pitch analyzer report must contain all 48 normal sample/tier mappings');
 }
 for (const mapping of report.mappings) {
   const actualRate = mappingApi.barkPlaybackRate(
@@ -257,6 +275,7 @@ const expectedRaisedHajimiTargets = {
   ji: [74, 72, 69, 67],
   mi: [72, 69, 67, 64],
 };
+const expectedVillagerTargets = [74, 72, 69, 67];
 for (const sample of sampleNames) {
   const rows = report.mappings
     .filter(item => item.sample === sample)
@@ -299,6 +318,12 @@ for (const sample of sampleNames) {
       throw new Error(`${sample}: raised Hajimi target sequence is incorrect`);
     }
   }
+  if (
+    sample.startsWith('villager_') &&
+    rows.some((row, index) => row.target_midi !== expectedVillagerTargets[index])
+  ) {
+    throw new Error(`${sample}: Villager target sequence is incorrect`);
+  }
 }
 
 const landscape = mappingApi.buildLayout(1200, 800);
@@ -327,8 +352,8 @@ const pianoOctaveStarts = [3, 4, 5, 6];
 const pianoIntervals = [0, 2, 4, 5, 7, 9, 11, 12];
 const pianoMidiForOctave = octave =>
   pianoIntervals.map(interval => (octave + 1) * 12 + interval);
-if (!Array.isArray(report.piano_mappings) || report.piano_mappings.length !== 288) {
-  throw new Error('Pitch analyzer report must contain all 288 piano sample/key mappings');
+if (!Array.isArray(report.piano_mappings) || report.piano_mappings.length !== 384) {
+  throw new Error('Pitch analyzer report must contain all 384 piano sample/key mappings');
 }
 for (const mapping of report.piano_mappings) {
   const pianoMidi = pianoMidiForOctave(mapping.octave_start);
@@ -452,13 +477,15 @@ if (
 }
 
 console.log(`Runtime fixed pitch mapping verified: ${checked} sample/tier keys`);
-console.log('SFX routing verified: Hajimi and Dingdong replace all three samples');
-console.log('Embedded audio verified: all nine runtime WAV files are present');
-console.log(
-  `Hajimi mi sustain verified: ` +
-  `${analysedMiSustain.pitch_span_cents.toFixed(3)} cents pitch span, ` +
-  `${analysedMiSustain.rms_span_db.toFixed(3)} dB level span`,
-);
+console.log('SFX routing verified: Hajimi, Dingdong, and Villager replace all three samples');
+console.log('Embedded audio verified: all 12 runtime WAV files are present');
+for (const [sample, analysedSustain] of Object.entries(analysedSustainRegions)) {
+  console.log(
+    `${sample} sustain verified: ` +
+    `${analysedSustain.pitch_span_cents.toFixed(3)} cents pitch span, ` +
+    `${analysedSustain.rms_span_db.toFixed(3)} dB level span`,
+  );
+}
 console.log('Repeated-key pitch stability verified: no chord/time-dependent switching');
 console.log('Layout verified: all four fixed pitch tiers retain their screen order');
 console.log('Raised Hajimi verified: lowest tier removed and new high tier added');

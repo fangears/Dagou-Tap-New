@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>BGM 预渲染工具</title>
+</head>
+<body>
+<pre id="status">打开页面后自动开始渲染…</pre>
+<script>
+'use strict';
+/* 用 OfflineAudioContext 离线渲染 4 小节鼓组 loop（与 src/synth.js 完全同参数），
+   尾部混响/镲片衰减回卷叠加到开头，得到无缝 loop 的 WAV。
+   产物：window.__bgmBase64（供自动化取走写入 assets/audio/bgm-loop.wav） */
+const BPM = 128;
+const SPB = 60 / BPM;
+const S16 = SPB / 4;
+const S8 = SPB / 2;
+const LOOP_SECONDS = 64 * S16; // 4 小节 × 16 步
+const TAIL_SECONDS = 1.5;
+const CHORDS = [
+  { bass: 65.41, notes: [261.63, 329.63, 392.00, 523.25] },
+  { bass: 49.00, notes: [196.00, 246.94, 293.66, 392.00] },
+  { bass: 55.00, notes: [220.00, 261.63, 329.63, 440.00] },
+  { bass: 43.65, notes: [174.61, 220.00, 261.63, 349.23] },
+];
+const HAT_VEL = [0.34, 0.16, 0.42, 0.16];
+
+function makeNoise(ctx) {
+  const buf = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+  return buf;
+}
+
+function scheduleAll(ctx, noiseBuf, bgmBus) {
+  function kick(t) {
+    const o = ctx.createOscillator(); const g = ctx.createGain();
+    o.type = 'sine';
+    o.frequency.setValueAtTime(160, t);
+    o.frequency.exponentialRampToValueAtTime(45, t + 0.11);
+    g.gain.setValueAtTime(0.95, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.24);
+    o.connect(g); g.connect(bgmBus);
+    o.start(t); o.stop(t + 0.26);
+  }
+  function snare(t, vol = 0.5) {
+    const n = ctx.createBufferSource(); n.buffer = noiseBuf;
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.value = 1800; f.Q.value = 0.9;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.16);
+    n.connect(f); f.connect(g); g.connect(bgmBus);
+    n.start(t); n.stop(t + 0.18);
+    const o = ctx.createOscillator(); o.type = 'triangle';
+    o.frequency.setValueAtTime(240, t);
+    const g2 = ctx.createGain();
+    g2.gain.setValueAtTime(vol * 0.5, t);
+    g2.gain.exponentialRampToValueAtTime(0.001, t + 0.09);
+    o.connect(g2); g2.connect(bgmBus);
+    o.start(t); o.stop(t + 0.1);
+  }
+  function hat(t, vol, decay) {
+    const n = ctx.createBufferSource(); n.buffer = noiseBuf;
+    const f = ctx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 7500;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(vol, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + decay);
+    n.connect(f); f.connect(g); g.connect(bgmBus);
+    n.start(t); n.stop(t + decay + 0.02);
+  }
+  function crash(t) {
+    const n = ctx.createBufferSource(); n.buffer = noiseBuf; n.loop = true;
+    const f = ctx.createBiquadFilter(); f.type = 'highpass'; f.frequency.value = 5000;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.32, t);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 1.2);
+    n.connect(f); f.connect(g); g.connect(bgmBus);
+    n.start(t); n.stop(t + 1.3);
+  }
+  function stab(t, freqs) {
+    const f = ctx.createBiquadFilter();
+    f.type = 'lowpass';
+    f.frequency.setValueAtTime(2600, t);
+    f.frequency.exponentialRampToValueAtTime(600, t + 0.28);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.14, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.001, t + 0.28);
+    f.connect(g); g.connect(bgmBus);
+    for (const fr of freqs) {
+      for (const det of [-6, 5]) {
+        const o = ctx.createOscillator();
+        o.type = 'sawtooth';
+        o.frequency.value = fr;
+        o.detune.value = det;
+        o.connect(f);
+        o.start(t); o.stop(t + 0.3);
+      }
+    }
+  }
+  function bass(t, fr, vol) {
+    const o = ctx.createOscillator(); o.type = 'square';
+    o.frequency.value = fr * 2;
+    const f = ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = 300;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.001, t + S8 * 0.9);
+    o.connect(f); f.connect(g); g.connect(bgmBus);
+    o.start(t); o.stop(t + S8);
+  }
+
+  for (let s = 0; s < 64; s++) {
+    const t = 0.05 + s * S16; // 留 50ms 起音余量，尾部回卷时对齐
+    const bar = (s / 16) | 0;
+    const pos = s % 16;
+    const ch = CHORDS[bar];
+    if (bar === 0 && pos === 0) crash(t);
+    if (pos % 4 === 0) kick(t);
+    if (pos === 4 || pos === 12) snare(t);
+    if (bar === 3 && pos === 14) snare(t, 0.3);
+    hat(t, HAT_VEL[pos % 4], pos === 14 ? 0.12 : 0.04);
+    if (pos % 4 === 2) stab(t, ch.notes);
+    if (pos % 2 === 0) bass(t, ch.bass, pos % 4 === 0 ? 0.4 : 0.26);
+  }
+}
+
+function encodeWav(samples, sampleRate) {
+  const numCh = samples.length;
+  const len = samples[0].length;
+  const bytes = 44 + len * numCh * 2;
+  const view = new DataView(new ArrayBuffer(bytes));
+  const writeStr = (offset, str) => {
+    for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i));
+  };
+  writeStr(0, 'RIFF');
+  view.setUint32(4, bytes - 8, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, numCh, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * numCh * 2, true);
+  view.setUint16(32, numCh * 2, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, 'data');
+  view.setUint32(40, len * numCh * 2, true);
+  let offset = 44;
+  for (let i = 0; i < len; i++) {
+    for (let ch = 0; ch < numCh; ch++) {
+      const v = Math.max(-1, Math.min(1, samples[ch][i]));
+      view.setInt16(offset, v < 0 ? v * 0x8000 : v * 0x7fff, true);
+      offset += 2;
+    }
+  }
+  return view.buffer;
+}
+
+function bufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  let binary = '';
+  const CHUNK = 0x8000;
+  for (let i = 0; i < bytes.length; i += CHUNK) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+  }
+  return btoa(binary);
+}
+
+async function render() {
+  const status = document.getElementById('status');
+  const sampleRate = 44100;
+  const totalFrames = Math.ceil((LOOP_SECONDS + TAIL_SECONDS) * sampleRate);
+  const ctx = new OfflineAudioContext(2, totalFrames, sampleRate);
+  const noiseBuf = makeNoise(ctx);
+  const master = ctx.createGain();
+  master.gain.value = 0.85;
+  const comp = ctx.createDynamicsCompressor();
+  comp.threshold.value = -14; comp.knee.value = 24; comp.ratio.value = 5;
+  comp.attack.value = 0.004; comp.release.value = 0.18;
+  const bgmBus = ctx.createGain();
+  bgmBus.connect(master);
+  master.connect(comp);
+  comp.connect(ctx.destination);
+  scheduleAll(ctx, noiseBuf, bgmBus);
+
+  const rendered = await ctx.startRendering();
+  // 尾部（> LOOP_SECONDS）回卷叠加到开头，消除 loop 接缝
+  const loopFrames = Math.round(LOOP_SECONDS * sampleRate);
+  const out = [new Float32Array(loopFrames), new Float32Array(loopFrames)];
+  for (let ch = 0; ch < 2; ch++) {
+    const src = rendered.getChannelData(ch);
+    for (let i = 0; i < loopFrames; i++) out[ch][i] = src[i];
+    for (let i = loopFrames; i < src.length; i++) {
+      out[ch][i - loopFrames] += src[i] * (1 - (i - loopFrames) / (src.length - loopFrames));
+    }
+  }
+  const wav = encodeWav(out, sampleRate);
+  window.__bgmBase64 = bufferToBase64(wav);
+  status.textContent = '渲染完成，长度 ' + LOOP_SECONDS.toFixed(2) + 's，' +
+    'WAV ' + Math.round(wav.byteLength / 1024) + ' KB';
+  document.title = 'bgm-done';
+}
+
+render().catch((e) => {
+  document.getElementById('status').textContent = '渲染失败: ' + e.message;
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+<title>大狗嚼 · 抖音小游戏预览</title>
+<style>
+  html, body { margin: 0; padding: 0; height: 100%; overflow: hidden; background: #fff2dc; }
+  #game-canvas { width: 100vw; height: 100vh; display: block; touch-action: none; }
+  #boot-status {
+    position: fixed; left: 8px; top: 8px; z-index: 99;
+    font: 12px/1.4 monospace; color: #87837e; pointer-events: none;
+  }
+</style>
+</head>
+<body>
+  <canvas id="game-canvas"></canvas>
+  <div id="boot-status">加载中…</div>
+  <script src="../platform/tt.browser.js"></script>
+  <script>
+    window.addEventListener('__game-booted', () => {
+      document.getElementById('boot-status').textContent = '';
+    });
+  </script>
+  <script src="loader.js"></script>
+</body>
+</html>

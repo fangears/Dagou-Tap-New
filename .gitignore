@@ -1,3 +1,4 @@
 /Dagou-Tap-New.zip
 __pycache__/
 *.pyc
+tools/node_modules/

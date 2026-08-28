@@ -1,0 +1,30 @@
+{
+  "miniprogramRoot": "./",
+  "projectname": "dagou-chew",
+  "appid": "ttf5ad83106bcaa54702",
+  "description": "大狗嚼 —— 点击屏幕让角色卡在节拍上叫（抖音小游戏版）",
+  "setting": {
+    "es6": true,
+    "urlCheck": false,
+    "minified": true,
+    "autoAudits": false
+  },
+  "packOptions": {
+    "ignore": [
+      { "type": "folder", "value": "tools" },
+      { "type": "folder", "value": "docs" },
+      { "type": "folder", "value": "design" },
+      { "type": "folder", "value": "platform" },
+      { "type": "folder", "value": "preview" },
+      { "type": "folder", "value": "Image" },
+      { "type": "folder", "value": "audio" },
+      { "type": "folder", "value": ".git" },
+      { "type": "file", "value": "index.html" },
+      { "type": "file", "value": "main.js" },
+      { "type": "file", "value": "audio-data.js" },
+      { "type": "file", "value": ".gitignore" },
+      { "type": "file", "value": "README.md" }
+    ]
+  },
+  "condition": {}
+}

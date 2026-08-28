@@ -1,0 +1,16 @@
+{
+  "name": "tools",
+  "version": "1.0.0",
+  "description": "此目录不参与网页运行，发布或打包时可以整体排除。",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "sharp": "^0.35.4"
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "deviceOrientation": "portrait",
+  "showStatusBar": false,
+  "subPackages": [
+    {
+      "root": "packages/emperor",
+      "name": "emperor"
+    }
+  ]
+}

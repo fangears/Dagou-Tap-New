@@ -502,6 +502,13 @@ function layoutSettings() {
   }
   items.push({ type: 'status', y, h: 20 });
   y += 20;
+
+  // 游戏：回到开始页
+  items.push({ type: 'label', y, h: 18, text: '游戏 · GAME' });
+  y += 18;
+  items.push({ type: 'exitRow', y, h: 50, x: innerPadX, w: contentW });
+  y += 50;
+
   const contentH = y + 16;
 
   const { maxContentH } = panelMetrics();
@@ -527,6 +534,10 @@ function layoutSettings() {
     .map((i) => ({ ...i, screenX: panel.x + i.x, screenY: panel.y + i.y - state.settingsScroll }));
   hit.settingRows = items.filter((i) => i.type === 'settingRow')
     .map((i) => ({ ...i, screenX: panel.x + i.x, screenY: panel.y + i.y - state.settingsScroll }));
+  const exitItem = items.find((i) => i.type === 'exitRow');
+  hit.exitRow = exitItem
+    ? { ...exitItem, screenX: panel.x + exitItem.x, screenY: panel.y + exitItem.y - state.settingsScroll }
+    : null;
   return panel;
 }
 
@@ -717,6 +728,26 @@ function renderPanelContent(sg, panel) {
         sg.fillStyle = 'rgba(135, 131, 126, .78)';
         sg.textAlign = 'left';
         sg.fillText(config.SETTINGS_STATUS_SAVED, contentX + 2, y + 10);
+        break;
+      }
+      case 'exitRow': {
+        drawChamferButton(
+          sg,
+          { x: contentX, y, w: item.w, h: item.h },
+          {
+            edge: 'rgba(255, 90, 95, .55)',
+            fill: 'rgba(255, 255, 255, .72)',
+            chamfer: 12,
+          }
+        );
+        sg.font = font(750, 13);
+        sg.fillStyle = '#9e4145';
+        sg.textAlign = 'left';
+        sg.fillText('回到开始页', contentX + 12, y + 19);
+        sg.font = font(400, 11);
+        sg.fillStyle = 'rgba(135, 131, 126, .82)';
+        sg.fillText('停止音乐并返回开始画面', contentX + 12, y + 35);
+        drawStrokeIcon(sg, contentX + item.w - 12 - 22, y + 15, 20, ICONS.close, 'rgba(255, 90, 95, .8)', 2.2);
         break;
       }
     }
@@ -919,6 +950,9 @@ function findPanelItem(x, y) {
       return { kind: 'setting', key: row.row.key };
     }
   }
+  if (hit.exitRow && pointIn(x, y, { x: hit.exitRow.screenX, y: hit.exitRow.screenY, w: hit.exitRow.w, h: hit.exitRow.h })) {
+    return { kind: 'exit' };
+  }
   return null;
 }
 
@@ -942,6 +976,7 @@ function handleTouchStart(x, y) {
         if (item.kind === 'sfx') gameApi.selectSfx(item.sfxId);
         else if (item.kind === 'skin') gameApi.selectSkin(item.skin);
         else if (item.kind === 'setting') gameApi.toggleSetting(item.key);
+        else if (item.kind === 'exit') gameApi.exitGame();
       }) : null,
       x,
       y,

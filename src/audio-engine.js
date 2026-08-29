@@ -16,6 +16,7 @@ let audio = null;       // audio-backend 产物
 let synth = null;       // synth.js 产物
 let hooks = null;       // 视觉回调 { openMouth, barkKick, spawnEffect, villagerHit, endInput, showToast }
 let bgmLoopBuffer = null;
+let bgmLoopSource = null;
 const liveVoices = new Set();
 let voiceSerial = 0;
 let activeSustainVoice = null;
@@ -656,10 +657,17 @@ function scheduleStep(s, t) {
 
 function startBgmLoop() {
   if (synth.enabled || !bgmLoopBuffer) return;
+  // 再进入时先停掉旧循环源，避免双份 BGM
+  if (bgmLoopSource) {
+    safeStop(bgmLoopSource);
+    try { bgmLoopSource.disconnect(); } catch (_) { }
+    bgmLoopSource = null;
+  }
   const source = audio.ctx.createBufferSource();
   source.buffer = bgmLoopBuffer;
   source.loop = true;
   source.connect(audio.bgmBus);
+  bgmLoopSource = source;
   source.start(state.startTime);
 }
 

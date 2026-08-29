@@ -501,7 +501,15 @@ function onTouchStart(res) {
 
   restoreAudioIfNeeded();
 
+  // 未开始：顶栏按钮（音乐/音效/设置）仍可交互，只有点在空白处才进入游戏
   if (!state.started || !state.buffers.da) {
+    const uiResult = ui.handleTouchStart(x, y);
+    if (uiResult.handled) {
+      if (uiResult.action === 'music') toggleMusic();
+      else if (uiResult.action === 'sfx') toggleSfx();
+      else if (uiResult.action === 'settings') openSettings();
+      return;
+    }
     state.pointers.set(id, createInputState(x, y));
     hideControlsUntilIdle();
     void start();
@@ -559,29 +567,41 @@ function restoreAudioIfNeeded() {
 }
 
 /* ============================================================
- * 启动
+ * 启动 / 退出
  * ==========================================================*/
 async function start() {
   if (state.started) return;
   state.started = true;
   hideControlsUntilIdle();
 
-  audio = audioBackend.createAudioBackend();
-  state.audio = audio;
-  await audio.resume();
-  synth = synthModule.createSynth(audio);
+  if (!audio) {
+    // 首次进入：创建音频上下文并解码采样
+    audio = audioBackend.createAudioBackend();
+    state.audio = audio;
+    await audio.resume();
+    synth = synthModule.createSynth(audio);
 
-  audioEngine.init(audio, synth, {
-    openMouth, lockMouth, unlockMouth, barkKick,
-    spawnEffect: visuals.spawnEffect,
-    flashZone: visuals.flashZone,
-    villagerHit: triggerVillagerHit,
-    endInput,
-    hideControlsUntilIdle,
-  });
+    audioEngine.init(audio, synth, {
+      openMouth, lockMouth, unlockMouth, barkKick,
+      spawnEffect: visuals.spawnEffect,
+      flashZone: visuals.flashZone,
+      villagerHit: triggerVillagerHit,
+      endInput,
+      hideControlsUntilIdle,
+    });
 
-  await audioEngine.loadSamples();
-  await audioEngine.tryLoadBgmLoop();
+    await audioEngine.loadSamples();
+    await audioEngine.tryLoadBgmLoop();
+  } else {
+    // 再次进入：音频时钟在退出时被挂起冻结，恢复后节拍无缝续接
+    await audio.resume();
+  }
+
+  if (audio.caps.gain) {
+    const now = audio.ctx.currentTime;
+    audio.master.gain.cancelScheduledValues(now);
+    audio.master.gain.setValueAtTime(config.MASTER_GAIN, now);
+  }
 
   state.startTime = audio.ctx.currentTime + 0.12;
   state.nextNoteTime = state.startTime;
@@ -589,9 +609,49 @@ async function start() {
   state.inputQueue.length = 0;
   state.stepCount = 0;
   audioEngine.startBgmLoop();
-  schedulerTimer = setInterval(audioEngine.scheduler, 25);
+  if (!schedulerTimer) {
+    schedulerTimer = setInterval(audioEngine.scheduler, 25);
+  }
 
   state.overlayHideSince = Date.now();
+}
+
+/* 回到开始页：停声 + 挂起音频时钟（节拍位置保留，可无缝续接） */
+function exitGame() {
+  closeSettings();
+  if (!state.started) return;
+
+  audioEngine.settleActivePerformanceInput();
+  audioEngine.stopAllVoices();
+  resetVillagerHitState();
+  if (schedulerTimer) {
+    clearInterval(schedulerTimer);
+    schedulerTimer = 0;
+  }
+  if (audio) {
+    // 双保险：主音量淡出到 0（兼容无 suspend 的实现）+ 尝试挂起时钟
+    try {
+      if (audio.caps.gain) {
+        const now = audio.ctx.currentTime;
+        audio.master.gain.cancelScheduledValues(now);
+        audio.master.gain.setValueAtTime(audio.master.gain.value, now);
+        audio.master.gain.linearRampToValueAtTime(0, now + 0.06);
+      }
+      if (typeof audio.ctx.suspend === 'function') {
+        void audio.ctx.suspend();
+      }
+    } catch (_) { /* 忽略 */ }
+  }
+  clearTimeout(state.mouthTimer);
+  state.mouthPopped = false;
+  state.mouthVoice = null;
+  state.holding = false;
+  state.holdLevel = 0;
+  state.started = false;
+  state.overlayGone = false;
+  state.overlayHideSince = 0;
+  state.controlsVisible = true;
+  clearTimeout(state.controlsIdleTimer);
 }
 
 /* ============================================================
@@ -698,7 +758,7 @@ function init() {
   ui.init(ctx, {
     toggleMusic, toggleSfx, openSettings, closeSettings,
     toggleSetting, selectSfx, selectSkin, shiftOctave,
-    accelerateControlsReveal,
+    accelerateControlsReveal, exitGame,
   }, icons);
 
   void visuals.ensureCharacterLoaded(state.selectedSfxId);

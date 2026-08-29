@@ -14,6 +14,7 @@ const FX_IN = 0.55;
 const FX_OUT = 0.4;
 
 let g = null;                 // 主画布 2d context
+let mainCanvas = null;        // 主画布（全幅清除用）
 let fxW = 0, fxH = 0;
 let fxList = [];
 const zoneFlashes = [];       // { zi, born }
@@ -739,6 +740,8 @@ function drawVillagerParticles() {
   g.globalAlpha = 1;
 }
 
+let comboTextCache = { value: -1, text: '', width: 0 };
+
 function drawCombo() {
   const combo = state.villagerHitUi;
   if (!combo || combo.mode === 'hidden') return;
@@ -763,13 +766,20 @@ function drawCombo() {
   }
   if (alpha <= 0) return;
 
+  if (comboTextCache.value !== combo.value || comboTextCache.fontSize !== fontSize) {
+    comboTextCache.value = combo.value;
+    comboTextCache.fontSize = fontSize;
+    comboTextCache.text = `HIT ×${combo.value}`;
+    g.font = `900 ${fontSize}px sans-serif`;
+    comboTextCache.width = g.measureText(comboTextCache.text).width;
+  }
+
   g.save();
   g.globalAlpha = alpha;
   g.translate(m.width / 2, top + offsetY);
   g.scale(scale, scale);
-  g.font = `900 ${fontSize}px sans-serif`;
-  const text = `HIT ×${combo.value}`;
-  const textWidth = g.measureText(text).width;
+  const text = comboTextCache.text;
+  const textWidth = comboTextCache.width;
   const padX = 12;
   const pillW = textWidth + padX * 2;
   const pillH = fontSize + 13;
@@ -795,7 +805,11 @@ function drawCombo() {
 
 /* ============================================================
  * 署名（右下角 Created by MarkCup，逐字母跟拍）
+ * 字母与宽度缓存，避免逐帧 measureText / 数组分配
  * ==========================================================*/
+const AUTHOR_NAME = 'MarkCup';
+let authorLetterWidths = null;   // 惰性测量一次
+
 function drawAuthorLink(beatPosition) {
   const m = state.metrics;
   const pulse = Number.isFinite(beatPosition)
@@ -805,13 +819,11 @@ function drawAuthorLink(beatPosition) {
 
   const blockW = 124;
   const right = m.width - 18 - blockW;
-  const bottom = m.height - 16;
-  const lift = -pulse * 1.4;
-  const blockScale = 1 + pulse * 0.032;
+  const bottom = m.height - Math.max(16, state.safeBottom + 8);
 
   g.save();
-  g.translate(right, bottom + lift);
-  g.scale(blockScale, blockScale);
+  g.translate(right, bottom - pulse * 1.4);
+  g.scale(1 + pulse * 0.032, 1 + pulse * 0.032);
 
   g.textAlign = 'left';
   g.textBaseline = 'alphabetic';
@@ -819,18 +831,27 @@ function drawAuthorLink(beatPosition) {
   g.fillStyle = 'rgba(255, 180, 0, .78)';
   g.fillText('CREATED BY', 0, 0);
 
-  // MarkCup 逐字母放大（活动字母 = beatIndex % length）
   g.font = '700 20px serif';
+  if (!authorLetterWidths) {
+    const widths = [];
+    let sum = 0;
+    for (const ch of AUTHOR_NAME) {
+      const w = g.measureText(ch).width;
+      widths.push(w);
+      sum += w;
+    }
+    widths.letterSpacing = (blockW - sum) / AUTHOR_NAME.length;
+    widths.total = sum;
+    authorLetterWidths = widths;
+  }
   g.fillStyle = C.amber;
-  const letters = [...'MarkCup'];
-  const letterSpacing = (blockW - letters.reduce((s, ch) => s + g.measureText(ch).width, 0)) / letters.length;
   let cursor = 0;
-  for (let i = 0; i < letters.length; i++) {
-    const ch = letters[i];
-    const scale = i === ((beatIndex % letters.length) + letters.length) % letters.length
+  for (let i = 0; i < AUTHOR_NAME.length; i++) {
+    const ch = AUTHOR_NAME[i];
+    const w = authorLetterWidths[i];
+    const scale = i === ((beatIndex % AUTHOR_NAME.length) + AUTHOR_NAME.length) % AUTHOR_NAME.length
       ? 1 + pulse * 0.24
       : 1;
-    const w = g.measureText(ch).width;
     if (scale !== 1) {
       g.save();
       g.translate(cursor + w / 2, -11);
@@ -840,7 +861,7 @@ function drawAuthorLink(beatPosition) {
     } else {
       g.fillText(ch, cursor, -11);
     }
-    cursor += w + letterSpacing;
+    cursor += w + authorLetterWidths.letterSpacing;
   }
   g.restore();
 }
@@ -855,8 +876,15 @@ function resize() {
 }
 
 function render(beatPosition) {
+  // 全幅清除：恒等变换按位图实际尺寸铺底，任何逻辑尺寸错位都不会留下残影
+  const bitmapW = mainCanvas ? mainCanvas.width : Math.round(fxW * state.dpr);
+  const bitmapH = mainCanvas ? mainCanvas.height : Math.round(fxH * state.dpr);
+  g.save();
+  g.setTransform(1, 0, 0, 1, 0, 0);
   g.fillStyle = C.cream;
-  g.fillRect(0, 0, fxW, fxH);
+  g.fillRect(0, 0, bitmapW, bitmapH);
+  g.restore();
+
   fxFrame(nowSec());
   drawKeyGrid();
   drawZoneFlashes();
@@ -866,8 +894,9 @@ function render(beatPosition) {
   drawAuthorLink(beatPosition);
 }
 
-function init(context2d) {
+function init(context2d, canvas) {
   g = context2d;
+  mainCanvas = canvas ?? null;
 }
 
 function resetVillagerHitVisual() {

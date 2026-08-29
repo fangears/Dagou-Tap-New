@@ -23,6 +23,7 @@ let audio = null;
 let synth = null;
 let schedulerTimer = 0;
 let resizeTimer = 0;
+let layoutPollCounter = 0;
 let scrollPointerId = null;
 let scrollLastY = 0;
 
@@ -39,7 +40,7 @@ function setupCanvas() {
 
 function updateLayout() {
   const info = tt.getSystemInfoSync();
-  const dpr = Math.min(info.pixelRatio || 1, 2);
+  const dpr = Math.max(1, Math.min(info.pixelRatio || 1, 2));
   state.dpr = dpr;
   state.metrics = {
     width: info.windowWidth,
@@ -51,12 +52,44 @@ function updateLayout() {
   state.sceneUnit = state.landscape
     ? info.windowHeight / 2
     : info.windowWidth / 1.5;
+
+  // 刘海 / 手势条安全区
+  const safeArea = info.safeArea;
+  const screenHeight = info.screenHeight ?? info.windowHeight;
+  if (safeArea && typeof safeArea.top === 'number') {
+    state.safeTop = Math.max(0, Math.round(safeArea.top));
+    state.safeBottom = Math.max(0, Math.round(screenHeight - safeArea.bottom));
+  } else {
+    state.safeTop = 0;
+    state.safeBottom = 0;
+  }
+
   if (canvas) {
     canvas.width = Math.round(info.windowWidth * dpr);
     canvas.height = Math.round(info.windowHeight * dpr);
-    if (ctx) ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    if (ctx) {
+      try {
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      } catch (_) {
+        ctx.scale(dpr, dpr);
+      }
+    }
   }
   visuals.resize();
+}
+
+/* 轮询布局自愈：部分环境（真机 URL 栏收缩、预览面板拖拽）不派发 resize 事件 */
+function pollLayout() {
+  try {
+    const info = tt.getSystemInfoSync();
+    if (
+      info.windowWidth !== state.metrics.width ||
+      info.windowHeight !== state.metrics.height ||
+      Math.min(info.pixelRatio || 1, 2) !== state.dpr
+    ) {
+      handleLayoutResize();
+    }
+  } catch (_) { /* 忽略轮询失败 */ }
 }
 
 function handleLayoutResize() {
@@ -251,6 +284,7 @@ function toggleSetting(key) {
     [key]: nextValue,
   });
   storage.set(config.STORAGE_KEYS[key], nextValue ? '1' : '0');
+  bumpPanel();
 }
 
 function shiftOctave(direction) {
@@ -272,6 +306,10 @@ function shiftOctave(direction) {
 }
 
 /* ---------- 角色与皮肤 ---------- */
+function bumpPanel() {
+  state.panelVersion++;
+}
+
 async function selectSfx(sfxId) {
   const nextSfxId = config.SFX_SAMPLE_SETS[sfxId] ? sfxId : 'hajimi';
   if (nextSfxId === state.selectedSfxId) return;
@@ -281,6 +319,7 @@ async function selectSfx(sfxId) {
   resetVillagerHitState();
   state.selectedSfxId = nextSfxId;
   state.hajimiAnimationEnabled = false;
+  bumpPanel();
   await visuals.ensureCharacterLoaded(nextSfxId);
 }
 
@@ -289,6 +328,7 @@ async function selectSkin(skin) {
   const useEmperor = skin === 'emperor';
   if (useEmperor === state.hajimiAnimationEnabled) return;
   state.hajimiAnimationEnabled = useEmperor;
+  bumpPanel();
   if (useEmperor) {
     alignHajimiAnimationToBeat();
     try {
@@ -336,12 +376,15 @@ function markSettingsSeen() {
 }
 
 function markAllSfxNewSeen() {
+  let changed = false;
   for (const sfxId of config.NEW_ITEM_IDS) {
     if (!state.newSeen[sfxId]) {
       state.newSeen[sfxId] = true;
       storage.set(config.STORAGE_KEYS[`${sfxId}NewSeen`], '1');
+      changed = true;
     }
   }
+  if (changed) bumpPanel();
 }
 
 function openSettings() {
@@ -350,6 +393,7 @@ function openSettings() {
   state.settingsOpen = true;
   state.settingsOpenSince = Date.now();
   state.settingsScroll = 0;
+  bumpPanel();
 }
 
 function closeSettings() {
@@ -469,7 +513,8 @@ function onTouchStart(res) {
     if (uiResult.action === 'music') toggleMusic();
     else if (uiResult.action === 'sfx') toggleSfx();
     else if (uiResult.action === 'settings') openSettings();
-    else if (uiResult.scroll) {
+    // 面板内触摸都可能演变为滚动，统一记入滚动指针
+    if (state.settingsOpen) {
       scrollPointerId = id;
       scrollLastY = y;
     }
@@ -487,7 +532,7 @@ function onTouchMove(res) {
   const y = touch.clientY;
 
   if (scrollPointerId === id) {
-    ui.markPanelDrag(y - scrollLastY);
+    ui.handlePanelMove(y - scrollLastY);
     scrollLastY = y;
     return;
   }
@@ -502,6 +547,7 @@ function onTouchEnd(res, musical) {
   const id = touch ? (touch.identifier ?? 't') : null;
   if (id !== null && scrollPointerId === id) {
     scrollPointerId = null;
+    ui.handlePanelEnd();
     return;
   }
   if (id === null) return;
@@ -558,6 +604,10 @@ function tick() {
     : Date.now() / 1000;
   const dt = Math.min(0.05, Math.max(0.001, now - state.lastTick));
   state.lastTick = now;
+  if (++layoutPollCounter >= 60) {
+    layoutPollCounter = 0;
+    pollLayout();
+  }
   const uiBeatPosition = getAudioBeatPosition();
 
   if (state.hajimiAnimationEnabled && state.hajimiAnimationReady) {
@@ -571,13 +621,12 @@ function tick() {
     state.beatP = Math.pow(1 - phase, 2.4);
 
     const sway = Math.sin(((t - state.startTime) / (SPB * 2)) * Math.PI * 2);
-    state.dogTransform = {
-      tx: sway * 5,
-      ty: -9 * state.beatP,
-      rotate: (sway * 2.4 * Math.PI) / 180,
-      sx: 1 + 0.06 * state.beatP,
-      sy: 1 - 0.05 * state.beatP,
-    };
+    const dogT = state.dogTransform;
+    dogT.tx = sway * 5;
+    dogT.ty = -9 * state.beatP;
+    dogT.rotate = (sway * 2.4 * Math.PI) / 180;
+    dogT.sx = 1 + 0.06 * state.beatP;
+    dogT.sy = 1 - 0.05 * state.beatP;
   }
 
   /* 叫弹跳弹簧 */
@@ -606,12 +655,11 @@ function tick() {
   const jx = (Math.sin(now * 120) + Math.sin(now * 197 + 1.7) * 0.6) * amp * 0.55;
   const jy = (Math.cos(now * 128 + 0.6) + Math.sin(now * 233 + 3.1) * 0.6) * amp * 0.55;
   const jr = (Math.sin(now * 108 + 2.2) + Math.sin(now * 181) * 0.5) * 2.4 * state.holdLevel * Math.PI / 180;
-  state.jellyTransform = {
-    tx: jx,
-    ty: jy,
-    rotate: jr,
-    scale: state.jellyScale,
-  };
+  const jellyT = state.jellyTransform;
+  jellyT.tx = jx;
+  jellyT.ty = jy;
+  jellyT.rotate = jr;
+  jellyT.scale = state.jellyScale;
 
   visuals.render(uiBeatPosition);
   ui.render(uiBeatPosition);
@@ -646,7 +694,7 @@ function init() {
   }
 
   grid.buildGrid();
-  visuals.init(ctx);
+  visuals.init(ctx, canvas);
   ui.init(ctx, {
     toggleMusic, toggleSfx, openSettings, closeSettings,
     toggleSetting, selectSfx, selectSkin, shiftOctave,

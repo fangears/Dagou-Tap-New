@@ -30,33 +30,64 @@ function font(weight, size, serif = false) {
 }
 
 /* ---------- 基础绘制 ---------- */
-function drawChamferButton(rect, options) {
+function drawChamferButton(g2, rect, options) {
   const {
     edge = 'rgba(135, 131, 126, .72)',
     fill = 'rgba(255, 242, 220, .92)',
     chamfer = 10,
   } = options;
 
-  g.save();
-  utils.traceChamferRect(g, rect.x, rect.y, rect.w, rect.h, chamfer);
-  g.fillStyle = edge;
-  g.fill();
-  utils.traceChamferRect(g, rect.x + 2, rect.y + 2, rect.w - 4, rect.h - 4, Math.max(4, chamfer - 2));
-  g.fillStyle = fill;
-  g.fill();
-  g.restore();
+  g2.save();
+  utils.traceChamferRect(g2, rect.x, rect.y, rect.w, rect.h, chamfer);
+  g2.fillStyle = edge;
+  g2.fill();
+  utils.traceChamferRect(g2, rect.x + 2, rect.y + 2, rect.w - 4, rect.h - 4, Math.max(4, chamfer - 2));
+  g2.fillStyle = fill;
+  g2.fill();
+  g2.restore();
 }
 
-function drawStrokeIcon(x, y, size, drawPath, color, lineWidth = 2) {
-  g.save();
-  g.translate(x, y);
-  g.scale(size / 24, size / 24);
-  g.strokeStyle = color;
-  g.lineWidth = lineWidth * (24 / size);
-  g.lineCap = 'round';
-  g.lineJoin = 'round';
-  drawPath(g);
-  g.restore();
+function drawStrokeIcon(g2, x, y, size, drawPath, color, lineWidth = 2) {
+  g2.save();
+  g2.translate(x, y);
+  g2.scale(size / 24, size / 24);
+  g2.strokeStyle = color;
+  g2.lineWidth = lineWidth * (24 / size);
+  g2.lineCap = 'round';
+  g2.lineJoin = 'round';
+  drawPath(g2);
+  g2.restore();
+}
+
+/* ---------- 精灵缓存：静态 UI 预烘焙为离屏画布，逐帧只做 drawImage 缩放 ---------- */
+const spriteCache = new Map();
+
+function getSprite(key, w, h, draw) {
+  const dpr = state.dpr;
+  const fullKey = `${key}@${Math.ceil(w * dpr)}x${Math.ceil(h * dpr)}d${dpr}`;
+  let sprite = spriteCache.get(fullKey);
+  if (!sprite) {
+    const canvas = assets.createOffscreenCanvas(
+      Math.max(1, Math.ceil(w * dpr)),
+      Math.max(1, Math.ceil(h * dpr))
+    );
+    const sg = canvas.getContext('2d');
+    try {
+      sg.setTransform(dpr, 0, 0, dpr, 0, 0);
+    } catch (_) {
+      sg.scale(dpr, dpr);
+    }
+    draw(sg, w, h);
+    sprite = { canvas, w, h };
+    spriteCache.set(fullKey, sprite);
+  }
+  return sprite;
+}
+
+function drawSpriteCentered(sprite, cx, cy, scale) {
+  const w = sprite.w * scale;
+  const h = sprite.h * scale;
+  g.drawImage(sprite.canvas, cx - w / 2, cy - h / 2, w, h);
 }
 
 /* 24×24 视窗的图标路径 */
@@ -90,12 +121,88 @@ const ICONS = {
 
 /* ---------- 顶部控制条 ---------- */
 function topInset() {
-  return 14;
+  return Math.max(SMALL() ? 10 : 14, state.safeTop);
+}
+
+function layoutHintBubble() {
+  if (state.settingsSeen) return null;
+  if (hintLayout && hintLayout.dpr === state.dpr) return hintLayout;
+  const bubbleText = ['点击设置', '切换大狗叫音效'];
+  g.font = font(750, 12);
+  const bubbleW = Math.max(...bubbleText.map((t) => g.measureText(t).width)) + 26;
+  const bubbleH = Math.ceil(12 * 1.55 * 2 + 17);
+  hintLayout = { dpr: state.dpr, bubbleText, bubbleW, bubbleH };
+  return hintLayout;
+}
+
+let hintLayout = null;
+let hintSprite = null;
+let hintSpriteKey = '';
+
+function getHintSprite() {
+  const layout = layoutHintBubble();
+  if (!layout) return null;
+  const key = `${layout.bubbleW}x${layout.bubbleH}@d${state.dpr}`;
+  if (hintSprite && hintSpriteKey === key) return hintSprite;
+  hintSpriteKey = key;
+  hintSprite = getSprite('hint-bubble', layout.bubbleW, layout.bubbleH + 22, (sg, w, h) => {
+    // 箭头
+    sg.strokeStyle = C.amber;
+    sg.lineWidth = 3;
+    sg.lineCap = 'round';
+    sg.lineJoin = 'round';
+    const arrowX = w - 12;
+    sg.beginPath();
+    sg.moveTo(arrowX, 18);
+    sg.lineTo(arrowX, 2);
+    sg.lineTo(arrowX - 7, 9);
+    sg.moveTo(arrowX, 2);
+    sg.lineTo(arrowX + 7, 9);
+    sg.stroke();
+    // 气泡
+    utils.traceChamferRect(sg, 0, 22, layout.bubbleW, layout.bubbleH, 10);
+    sg.fillStyle = C.amber;
+    sg.fill();
+    sg.font = font(750, 12);
+    sg.fillStyle = '#fffaf0';
+    sg.textAlign = 'center';
+    sg.textBaseline = 'middle';
+    for (let i = 0; i < layout.bubbleText.length; i++) {
+      sg.fillText(layout.bubbleText[i], layout.bubbleW / 2, 22 + 12 + i * (12 * 1.55));
+    }
+  });
+  return hintSprite;
+}
+
+function drawControlButton(rect, { icon, label, muted, pulse }) {
+  const small = SMALL();
+  const key = `btn:${icon}:${small ? 'icon' : label}:${muted ? 'm' : 'n'}`;
+  const sprite = getSprite(key, rect.w, rect.h, (sg, w, h) => {
+    const edge = muted ? 'rgba(255, 90, 95, .68)' : 'rgba(135, 131, 126, .72)';
+    const fill = muted ? 'rgba(255, 255, 255, .94)' : 'rgba(255, 242, 220, .92)';
+    drawChamferButton(sg, { x: 0, y: 0, w, h }, { edge, fill });
+
+    const iconColor = muted ? C.coral : C.gray;
+    const iconSize = 20;
+    sg.font = font(700, 13);
+    const textW = small ? 0 : sg.measureText(label).width;
+    const x = w / 2 - (iconSize + (small ? 0 : 6 + textW)) / 2;
+    const y = h / 2 - iconSize / 2;
+    drawStrokeIcon(sg, x, y, iconSize, ICONS[icon], iconColor);
+    if (muted) drawStrokeIcon(sg, x, y, iconSize, ICONS.slash, C.coral, 2.6);
+    if (!small) {
+      sg.fillStyle = iconColor;
+      sg.textAlign = 'left';
+      sg.textBaseline = 'middle';
+      sg.fillText(label, x + iconSize + 6, h / 2 + 1);
+    }
+  });
+  drawSpriteCentered(sprite, rect.x + rect.w / 2, rect.y + rect.h / 2, 1 + pulse * 0.075);
 }
 
 function layoutTopControls() {
   const m = state.metrics;
-  const inset = SMALL() ? 10 : topInset();
+  const inset = topInset();
   const small = SMALL();
   const btnH = 44;
   const btnW = small ? 46 : 68;
@@ -105,55 +212,17 @@ function layoutTopControls() {
   hit.sfx = { x: inset + btnW + gap, y: inset, w: btnW, h: btnH };
   hit.settings = { x: m.width - inset - btnW, y: inset, w: btnW, h: btnH };
 
-  if (state.settingsSeen) {
+  const layout = layoutHintBubble();
+  if (!layout) {
     hit.hint = null;
-  } else {
-    const bubbleText = ['点击设置', '切换大狗叫音效'];
-    g.font = font(750, 12);
-    const bubbleW = Math.max(...bubbleText.map((t) => g.measureText(t).width)) + 26;
-    const bubbleH = 12 * 1.55 * 2 + 17;
-    hit.hint = {
-      x: hit.settings.x + hit.settings.w - bubbleW,
-      y: hit.settings.y + hit.settings.h + 9,
-      w: bubbleW,
-      h: bubbleH + 22,
-      bubbleText,
-      bubbleW,
-      bubbleH,
-    };
+    return;
   }
-}
-
-function drawControlButton(rect, { icon, label, muted, pulse }) {
-  const scale = 1 + pulse * 0.075;
-  const cx = rect.x + rect.w / 2;
-  const cy = rect.y + rect.h / 2;
-  g.save();
-  g.translate(cx, cy);
-  g.scale(scale, scale);
-  g.translate(-cx, -cy);
-
-  const edge = muted ? 'rgba(255, 90, 95, .68)' : 'rgba(135, 131, 126, .72)';
-  const fill = muted ? 'rgba(255, 255, 255, .94)' : 'rgba(255, 242, 220, .92)';
-  drawChamferButton(rect, { edge, fill });
-
-  const small = SMALL();
-  const iconColor = muted ? C.coral : C.gray;
-  const contentW = rect.w - (small ? 16 : 24);
-  const iconSize = 20;
-  const textW = small ? 0 : g.measureText(label).width;
-  let x = cx - (iconSize + (small ? 0 : 6 + textW)) / 2;
-  const y = cy - iconSize / 2;
-  drawStrokeIcon(x, y, iconSize, ICONS[icon], iconColor);
-  if (muted) drawStrokeIcon(x, y, iconSize, ICONS.slash, C.coral, 2.6);
-  if (!small) {
-    g.font = font(700, 13);
-    g.fillStyle = iconColor;
-    g.textAlign = 'left';
-    g.textBaseline = 'middle';
-    g.fillText(label, x + iconSize + 6, cy + 1);
-  }
-  g.restore();
+  hit.hint = {
+    x: hit.settings.x + hit.settings.w - layout.bubbleW,
+    y: hit.settings.y + hit.settings.h + 9,
+    w: layout.bubbleW,
+    h: layout.bubbleH + 22,
+  };
 }
 
 function drawTopControls(beatPosition) {
@@ -203,40 +272,17 @@ function drawTopControls(beatPosition) {
   }
   g.restore();
 
-  // 新手引导气泡
-  if (hit.hint && (visible || settingsPinned)) {
-    const hint = hit.hint;
+  // 新手引导气泡（精灵化：bob 只改绘制位置）
+  const hintSprite = getHintSprite();
+  if (hit.hint && hintSprite && (visible || settingsPinned)) {
     const bob = Math.sin((Date.now() / 1000) * (Math.PI * 2 / 1.5)) >= 0 ? -4 : 0;
-    g.save();
-    g.translate(0, bob);
-    // 箭头
-    g.strokeStyle = C.amber;
-    g.lineWidth = 3;
-    g.lineCap = 'round';
-    g.lineJoin = 'round';
-    const arrowX = hint.x + hint.bubbleW - 12;
-    const arrowTop = hint.y + 2;
-    g.beginPath();
-    g.moveTo(arrowX, arrowTop + 16);
-    g.lineTo(arrowX, arrowTop);
-    g.lineTo(arrowX - 7, arrowTop + 7);
-    g.moveTo(arrowX, arrowTop);
-    g.lineTo(arrowX + 7, arrowTop + 7);
-    g.stroke();
-    // 气泡
-    const bubbleY = hint.y + 20;
-    utils.traceChamferRect(g, hint.x, bubbleY, hint.bubbleW, hint.bubbleH, 10);
-    g.fillStyle = C.amber;
-    g.fill();
-    g.font = font(750, 12);
-    g.fillStyle = '#fffaf0';
-    g.textAlign = 'center';
-    g.textBaseline = 'middle';
-    const lines = hint.bubbleText;
-    for (let i = 0; i < lines.length; i++) {
-      g.fillText(lines[i], hint.x + hint.bubbleW / 2, bubbleY + 12 + i * (12 * 1.55));
-    }
-    g.restore();
+    g.drawImage(
+      hintSprite.canvas,
+      hit.hint.x,
+      hit.hint.y + bob,
+      hintSprite.w,
+      hintSprite.h
+    );
   }
 }
 
@@ -298,15 +344,16 @@ function octaveBands() {
       up: { x: m.width - w, y: 0, w, h: m.height },
     };
   }
-  const h = Math.max(30, Math.min(40, m.height * 0.045));
+  // 竖屏上下横带：高度计入刘海/手势条安全区
+  const baseH = Math.max(30, Math.min(40, m.height * 0.045));
   return {
     landscape: false,
-    up: { x: 0, y: 0, w: m.width, h },
-    down: { x: 0, y: m.height - h, w: m.width, h },
+    up: { x: 0, y: 0, w: m.width, h: baseH + state.safeTop },
+    down: { x: 0, y: m.height - baseH - state.safeBottom, w: m.width, h: baseH + state.safeBottom },
   };
 }
 
-function drawOctaveBand(rect, direction, currentOctave) {
+function drawOctaveBand(rect, direction, currentOctave, contentCY) {
   const target = currentOctave + direction;
   const available = target >= config.PIANO_OCTAVE_MIN && target <= config.PIANO_OCTAVE_MAX;
   const landscape = state.metrics.width >= state.metrics.height;
@@ -323,7 +370,7 @@ function drawOctaveBand(rect, direction, currentOctave) {
   g.strokeRect(rect.x + 0.5, rect.y + 0.5, rect.w - 1, rect.h - 1);
 
   const cx = rect.x + rect.w / 2;
-  const cy = rect.y + rect.h / 2;
+  const cy = contentCY ?? rect.y + rect.h / 2;
   const vertical = landscape;
   g.font = font(650, 11);
   g.textAlign = 'center';
@@ -354,8 +401,15 @@ function drawOctaveControls() {
   const bands = octaveBands();
   if (!bands) return null;
   const current = music.effectivePianoOctaveStart(state.performanceSettings);
-  drawOctaveBand(bands.up, 1, current);
-  drawOctaveBand(bands.down, -1, current);
+  if (bands.landscape) {
+    drawOctaveBand(bands.up, 1, current);
+    drawOctaveBand(bands.down, -1, current);
+  } else {
+    // 竖屏：文字避开安全区，居中在可视部分
+    const upSafeH = bands.up.h - state.safeTop;
+    drawOctaveBand(bands.up, 1, current, state.safeTop + upSafeH / 2);
+    drawOctaveBand(bands.down, -1, current, bands.down.y + (bands.down.h - state.safeBottom) / 2);
+  }
   return bands;
 }
 
@@ -476,110 +530,97 @@ function layoutSettings() {
   return panel;
 }
 
-function drawSettingSwitch(x, y, checked) {
+/* ============================================================
+ * 设置面板离屏缓存：文本密集的内容层预渲染成一张离屏画布，
+ * 仅在 panelVersion 变化（切换音效/皮肤/开关/打开面板）时重绘；
+ * 逐帧只做一次 drawImage 源偏移（滚动 = 位块搬移），不再逐帧排版文本。
+ * ==========================================================*/
+let panelCacheCanvas = null;
+let panelCacheVersion = -1;
+let panelCacheW = 0;
+let panelCacheH = 0;
+
+function drawSettingSwitch(g2, x, y, checked) {
   const w = 46, h = 26;
-  g.save();
-  g.translate(x, y);
-  utils.traceChamferRect(g, 0, 0, w, h, 9);
-  g.fillStyle = checked ? C.amber : 'rgba(135, 131, 126, .38)';
-  g.fill();
+  g2.save();
+  g2.translate(x, y);
+  utils.traceChamferRect(g2, 0, 0, w, h, 9);
+  g2.fillStyle = checked ? C.amber : 'rgba(135, 131, 126, .38)';
+  g2.fill();
   const knobX = checked ? 4 + 20 : 4;
-  utils.traceChamferRect(g, knobX, 4, 18, 18, 6);
-  g.fillStyle = '#fffaf0';
-  g.fill();
-  utils.traceChamferRectPercent(g, knobX + 6, 10, 6, 6, 0.32, 0.68);
-  g.fillStyle = checked ? 'rgba(255, 180, 0, .9)' : 'rgba(135, 131, 126, .5)';
-  g.fill();
-  g.restore();
+  utils.traceChamferRect(g2, knobX, 4, 18, 18, 6);
+  g2.fillStyle = '#fffaf0';
+  g2.fill();
+  utils.traceChamferRectPercent(g2, knobX + 6, 10, 6, 6, 0.32, 0.68);
+  g2.fillStyle = checked ? 'rgba(255, 180, 0, .9)' : 'rgba(135, 131, 126, .5)';
+  g2.fill();
+  g2.restore();
 }
 
-function drawChamferedImage(image, x, y, size, chamfer) {
-  g.save();
-  utils.traceChamferRect(g, x, y, size, size, chamfer);
-  g.clip();
+function drawChamferedImage(g2, image, x, y, size, chamfer) {
+  g2.save();
+  utils.traceChamferRect(g2, x, y, size, size, chamfer);
+  g2.clip();
   const ratio = Math.max(size / image.width, size / image.height);
   const w = image.width * ratio;
   const h = image.height * ratio;
-  g.drawImage(image, x + (size - w) / 2, y + (size - h) / 2, w, h);
-  g.restore();
+  g2.drawImage(image, x + (size - w) / 2, y + (size - h) / 2, w, h);
+  g2.restore();
 }
 
-function drawSettings() {
-  const panel = layoutSettings();
-  const m = state.metrics;
-  const { pad, innerPadX } = panelMetrics();
-
-  // 遮罩
-  g.fillStyle = 'rgba(255, 242, 220, .88)';
-  g.fillRect(0, 0, m.width, m.height);
-
-  // 进入动画
-  const t = utils.clamp01((Date.now() - state.settingsOpenSince) / 320);
-  const ease = (v) => {
-    const bez = cubicBezierCached(0.2, 0.8, 0.2, 1);
-    return bez(v);
-  };
-  const k = ease(t);
-  g.save();
-  g.translate(panel.x + panel.w / 2, panel.y + panel.h / 2);
-  g.scale(0.97 + 0.03 * k, 0.97 + 0.03 * k);
-  g.translate(-(panel.x + panel.w / 2), -(panel.y + panel.h / 2) + 10 * (1 - k));
-  g.translate(0, -(10 * (1 - k)));
+/* 面板内容绘制（相对面板左上角的坐标，含面板底色与关闭按钮） */
+function renderPanelContent(sg, panel) {
+  const { innerPadX } = panelMetrics();
+  const contentX = innerPadX;
+  const contentW = panel.w - innerPadX * 2;
+  const closeRect = { x: panel.w - innerPadX - 40, y: 14, w: 40, h: 36 };
 
   // 面板外框（描边色）+ 内底
-  utils.traceChamferRect(g, panel.x, panel.y, panel.w, panel.h, 18);
-  g.fillStyle = 'rgba(135, 131, 126, .5)';
-  g.fill();
-  utils.traceChamferRect(g, panel.x + 2, panel.y + 2, panel.w - 4, panel.h - 4, 16);
-  g.fillStyle = 'rgba(255, 250, 240, .97)';
-  g.fill();
+  utils.traceChamferRect(sg, 0, 0, panel.w, panel.contentH, 18);
+  sg.fillStyle = 'rgba(135, 131, 126, .5)';
+  sg.fill();
+  utils.traceChamferRect(sg, 2, 2, panel.w - 4, panel.contentH - 4, 16);
+  sg.fillStyle = 'rgba(255, 250, 240, .97)';
+  sg.fill();
 
-  // 内容（裁剪 + 滚动）
-  g.save();
-  utils.traceChamferRect(g, panel.x + 2, panel.y + 2, panel.w - 4, panel.h - 4, 16);
-  g.clip();
-  g.translate(0, -state.settingsScroll);
-
-  g.textBaseline = 'middle';
-  const contentX = panel.x + innerPadX;
-  const contentW = panel.w - innerPadX * 2;
+  sg.textBaseline = 'middle';
   for (const item of panel.items) {
-    const y = panel.y + item.y;
+    const y = item.y;
     // 卡片类元素带相对 item.x，其余直接使用内容左边距
-    const ax = item.x !== undefined ? panel.x + item.x : contentX;
+    const ax = item.x !== undefined ? item.x : contentX;
     switch (item.type) {
       case 'head': {
-        g.font = font(900, 19);
-        g.fillStyle = C.amber;
-        g.textAlign = 'left';
-        utils.fillSpacedText(g, '设置', contentX, y + 18, 19 * 0.3, 'left');
-        drawChamferButton(hit.close, { chamfer: 10 });
-        drawStrokeIcon(hit.close.x + hit.close.w / 2 - 10, hit.close.y + hit.close.h / 2 - 10, 20, ICONS.close, C.gray);
+        sg.font = font(900, 19);
+        sg.fillStyle = C.amber;
+        sg.textAlign = 'left';
+        utils.fillSpacedText(sg, '设置', contentX, y + 18, 19 * 0.3, 'left');
+        drawChamferButton(sg, closeRect, { chamfer: 10 });
+        drawStrokeIcon(sg, closeRect.x + closeRect.w / 2 - 10, closeRect.y + closeRect.h / 2 - 10, 20, ICONS.close, C.gray);
         break;
       }
       case 'label': {
-        g.font = font(600, 10);
-        g.fillStyle = 'rgba(135, 131, 126, .78)';
-        g.textAlign = 'left';
-        utils.fillSpacedText(g, item.text, contentX, y + 9, 10 * 0.24, 'left');
+        sg.font = font(600, 10);
+        sg.fillStyle = 'rgba(135, 131, 126, .78)';
+        sg.textAlign = 'left';
+        utils.fillSpacedText(sg, item.text, contentX, y + 9, 10 * 0.24, 'left');
         break;
       }
       case 'author': {
         const avatarSize = 50;
-        g.save();
-        utils.traceChamferRect(g, contentX, y, avatarSize, avatarSize, 14);
-        g.fillStyle = 'rgba(255, 180, 0, .65)';
-        g.fill();
-        g.restore();
+        sg.save();
+        utils.traceChamferRect(sg, contentX, y, avatarSize, avatarSize, 14);
+        sg.fillStyle = 'rgba(255, 180, 0, .65)';
+        sg.fill();
+        sg.restore();
         const avatarImg = sfxIconImages.hajimi;
-        if (avatarImg) drawChamferedImage(avatarImg, contentX + 2, y + 2, avatarSize - 4, 12);
-        g.font = font(700, 17, true);
-        g.fillStyle = C.amber;
-        g.textAlign = 'left';
-        g.fillText('马克杯MarkCup', contentX + avatarSize + 12, y + 21);
-        g.font = font(600, 10);
-        g.fillStyle = 'rgba(135, 131, 126, .78)';
-        utils.fillSpacedText(g, '原作 · BILIBILI 创作者', contentX + avatarSize + 12, y + 39, 10 * 0.18, 'left');
+        if (avatarImg) drawChamferedImage(sg, avatarImg, contentX + 2, y + 2, avatarSize - 4, 12);
+        sg.font = font(700, 17, true);
+        sg.fillStyle = C.amber;
+        sg.textAlign = 'left';
+        sg.fillText('马克杯MarkCup', contentX + avatarSize + 12, y + 21);
+        sg.font = font(600, 10);
+        sg.fillStyle = 'rgba(135, 131, 126, .78)';
+        utils.fillSpacedText(sg, '原作 · BILIBILI 创作者', contentX + avatarSize + 12, y + 39, 10 * 0.18, 'left');
         break;
       }
       case 'sfxCard': {
@@ -588,6 +629,7 @@ function drawSettings() {
         const img = sfxIconImages[sfxId];
         const cx = ax + item.w / 2;
         drawChamferButton(
+          sg,
           { x: ax, y, w: item.w, h: item.h },
           {
             edge: active ? 'rgba(255, 180, 0, .92)' : 'rgba(135, 131, 126, .45)',
@@ -595,28 +637,29 @@ function drawSettings() {
             chamfer: 12,
           }
         );
-        if (img) g.drawImage(img, cx - 21, y + 10, 42, 42);
-        g.font = font(600, 12);
-        g.fillStyle = active ? '#d88f00' : C.gray;
-        g.textAlign = 'center';
-        g.fillText(config.SFX_LABELS[sfxId], cx, y + 62);
+        if (img) sg.drawImage(img, cx - 21, y + 10, 42, 42);
+        sg.font = font(600, 12);
+        sg.fillStyle = active ? '#d88f00' : C.gray;
+        sg.textAlign = 'center';
+        sg.fillText(config.SFX_LABELS[sfxId], cx, y + 62);
         // NEW 角标
         if (config.NEW_ITEM_IDS.has(sfxId) && !state.newSeen[sfxId]) {
-          g.font = font(900, 8);
+          sg.font = font(900, 8);
           const label = 'NEW';
-          const badgeW = g.measureText(label).width + 10;
-          utils.traceChamferRectPercent(g, ax + item.w - badgeW - 6, y + 6, badgeW, 13, 0.5, 0.5);
-          g.fillStyle = C.coral;
-          g.fill();
-          g.fillStyle = '#fffaf0';
-          g.textAlign = 'center';
-          g.fillText(label, ax + item.w - badgeW / 2 - 6, y + 13);
+          const badgeW = sg.measureText(label).width + 10;
+          utils.traceChamferRectPercent(sg, ax + item.w - badgeW - 6, y + 6, badgeW, 13, 0.5, 0.5);
+          sg.fillStyle = C.coral;
+          sg.fill();
+          sg.fillStyle = '#fffaf0';
+          sg.textAlign = 'center';
+          sg.fillText(label, ax + item.w - badgeW / 2 - 6, y + 13);
         }
         break;
       }
       case 'skinCard': {
         const active = item.skin === 'emperor' ? state.hajimiAnimationEnabled : !state.hajimiAnimationEnabled;
         drawChamferButton(
+          sg,
           { x: ax, y, w: item.w, h: item.h },
           {
             edge: active ? 'rgba(255, 180, 0, .92)' : 'rgba(135, 131, 126, .45)',
@@ -625,32 +668,33 @@ function drawSettings() {
           }
         );
         const img = item.skin === 'emperor' ? emperorIconImage : sfxIconImages.hajimi;
-        if (img) g.drawImage(img, ax + 10, y + 7, 34, 34);
-        g.font = font(750, 12);
-        g.fillStyle = active ? '#d88f00' : '#6f6a63';
-        g.textAlign = 'left';
-        g.fillText(item.name, ax + 52, y + 18);
-        g.font = font(400, 10);
-        g.fillStyle = 'rgba(135, 131, 126, .82)';
-        g.fillText(item.hint, ax + 52, y + 33);
+        if (img) sg.drawImage(img, ax + 10, y + 7, 34, 34);
+        sg.font = font(750, 12);
+        sg.fillStyle = active ? '#d88f00' : '#6f6a63';
+        sg.textAlign = 'left';
+        sg.fillText(item.name, ax + 52, y + 18);
+        sg.font = font(400, 10);
+        sg.fillStyle = 'rgba(135, 131, 126, .82)';
+        sg.fillText(item.hint, ax + 52, y + 33);
         break;
       }
       case 'note': {
-        g.fillStyle = 'rgba(135, 131, 126, .07)';
-        g.fillRect(contentX, y, contentW, item.h);
-        g.fillStyle = 'rgba(255, 180, 0, .58)';
-        g.fillRect(contentX, y, 3, item.h);
-        g.font = font(550, 9);
-        g.fillStyle = 'rgba(111, 106, 99, .86)';
-        g.textAlign = 'left';
+        sg.fillStyle = 'rgba(135, 131, 126, .07)';
+        sg.fillRect(contentX, y, contentW, item.h);
+        sg.fillStyle = 'rgba(255, 180, 0, .58)';
+        sg.fillRect(contentX, y, 3, item.h);
+        sg.font = font(550, 9);
+        sg.fillStyle = 'rgba(111, 106, 99, .86)';
+        sg.textAlign = 'left';
         for (let i = 0; i < item.lines.length; i++) {
-          g.fillText(item.lines[i], contentX + 12, y + 13 + i * 13.5);
+          sg.fillText(item.lines[i], contentX + 12, y + 13 + i * 13.5);
         }
         break;
       }
       case 'settingRow': {
         const checked = state.performanceSettings[item.row.key] === true;
         drawChamferButton(
+          sg,
           { x: contentX, y, w: item.w, h: item.h },
           {
             edge: checked ? 'rgba(255, 180, 0, .78)' : 'rgba(135, 131, 126, .42)',
@@ -658,26 +702,86 @@ function drawSettings() {
             chamfer: 12,
           }
         );
-        g.font = font(750, 13);
-        g.fillStyle = checked ? '#b57e00' : '#6f6a63';
-        g.textAlign = 'left';
-        g.fillText(item.row.name, contentX + 12, y + 19);
-        g.font = font(400, 11);
-        g.fillStyle = 'rgba(135, 131, 126, .82)';
-        g.fillText(item.row.desc, contentX + 12, y + 35);
-        drawSettingSwitch(contentX + item.w - 12 - 46, y + 12, checked);
+        sg.font = font(750, 13);
+        sg.fillStyle = checked ? '#b57e00' : '#6f6a63';
+        sg.textAlign = 'left';
+        sg.fillText(item.row.name, contentX + 12, y + 19);
+        sg.font = font(400, 11);
+        sg.fillStyle = 'rgba(135, 131, 126, .82)';
+        sg.fillText(item.row.desc, contentX + 12, y + 35);
+        drawSettingSwitch(sg, contentX + item.w - 12 - 46, y + 12, checked);
         break;
       }
       case 'status': {
-        g.font = font(400, 10);
-        g.fillStyle = 'rgba(135, 131, 126, .78)';
-        g.textAlign = 'left';
-        g.fillText(config.SETTINGS_STATUS_SAVED, contentX + 2, y + 10);
+        sg.font = font(400, 10);
+        sg.fillStyle = 'rgba(135, 131, 126, .78)';
+        sg.textAlign = 'left';
+        sg.fillText(config.SETTINGS_STATUS_SAVED, contentX + 2, y + 10);
         break;
       }
     }
   }
-  g.restore(); // 内容裁剪
+}
+
+function ensurePanelCache(panel) {
+  const dpr = state.dpr;
+  const wPx = Math.max(1, Math.ceil(panel.w * dpr));
+  const hPx = Math.max(1, Math.ceil(panel.contentH * dpr));
+  if (
+    panelCacheCanvas &&
+    panelCacheVersion === state.panelVersion &&
+    panelCacheW === wPx &&
+    panelCacheH === hPx
+  ) {
+    return panelCacheCanvas;
+  }
+  panelCacheCanvas = assets.createOffscreenCanvas(wPx, hPx);
+  const pg = panelCacheCanvas.getContext('2d');
+  try {
+    pg.setTransform(dpr, 0, 0, dpr, 0, 0);
+  } catch (_) {
+    pg.scale(dpr, dpr);
+  }
+  renderPanelContent(pg, panel);
+  panelCacheVersion = state.panelVersion;
+  panelCacheW = wPx;
+  panelCacheH = hPx;
+  return panelCacheCanvas;
+}
+
+function drawSettings() {
+  const panel = layoutSettings();
+  const m = state.metrics;
+  const panelCanvas = ensurePanelCache(panel);
+
+  // 遮罩
+  g.fillStyle = 'rgba(255, 242, 220, .88)';
+  g.fillRect(0, 0, m.width, m.height);
+
+  // 进入动画
+  const t = utils.clamp01((Date.now() - state.settingsOpenSince) / 320);
+  const k = cubicBezierCached(0.2, 0.8, 0.2, 1)(t);
+  const cx = panel.x + panel.w / 2;
+  const cy = panel.y + panel.h / 2;
+  g.save();
+  g.translate(cx, cy);
+  g.scale(0.97 + 0.03 * k, 0.97 + 0.03 * k);
+  g.translate(-cx, -cy + 10 * (1 - k));
+
+  // 面板内容（缓存位图；滚动 = 源矩形偏移）
+  g.save();
+  utils.traceChamferRect(g, panel.x + 2, panel.y + 2, panel.w - 4, panel.h - 4, 16);
+  g.clip();
+  const srcY = Math.max(0, Math.round(state.settingsScroll * state.dpr));
+  const destHPx = Math.min(panel.h - 4, (panelCacheH - srcY) / state.dpr);
+  if (destHPx > 0) {
+    g.drawImage(
+      panelCacheCanvas,
+      0, srcY, panelCacheW, Math.ceil(destHPx * state.dpr),
+      panel.x + 2, panel.y + 2, panel.w - 4, destHPx
+    );
+  }
+  g.restore();
 
   // 滚动条
   const maxScroll = Math.max(0, panel.contentH - panel.h);
@@ -725,7 +829,7 @@ function drawToast() {
   const m = state.metrics;
   const width = Math.min(420, m.width - 32);
   const x = (m.width - width) / 2;
-  const bottom = Math.max(24, 16);
+  const bottom = Math.max(24, state.safeBottom + 16);
 
   let alpha = 1;
   let offsetY = 0;
@@ -793,42 +897,57 @@ function pointIn(px, py, rect) {
   return rect && utils.pointInRect(px, py, rect);
 }
 
-/* 返回 { handled }；handled=true 表示触摸被 UI 消费，不再落到游戏分区 */
+/* 返回 { handled }；handled=true 表示触摸被 UI 消费，不再落到游戏分区。
+ * 面板内采用"移动优先"手势：按下仅记录候选，移动超阈值判定为滚动，
+ * 抬手时未发生滚动才提交点击动作（贴合移动端原生手感）。 */
+let pendingPanelTouch = null;   // { action, x, y, accumulated }
+let panelScrolling = false;
+
+function findPanelItem(x, y) {
+  for (const card of hit.sfxCards) {
+    if (pointIn(x, y, { x: card.screenX, y: card.screenY, w: card.w, h: card.h })) {
+      return { kind: 'sfx', sfxId: card.sfxId };
+    }
+  }
+  for (const card of hit.skinCards) {
+    if (pointIn(x, y, { x: card.screenX, y: card.screenY, w: card.w, h: card.h })) {
+      return { kind: 'skin', skin: card.skin };
+    }
+  }
+  for (const row of hit.settingRows) {
+    if (pointIn(x, y, { x: row.screenX, y: row.screenY, w: row.w, h: row.h })) {
+      return { kind: 'setting', key: row.row.key };
+    }
+  }
+  return null;
+}
+
 function handleTouchStart(x, y) {
   // 设置面板打开时，一切交互都在面板层
   if (state.settingsOpen) {
     const panel = hit.panel;
-    if (panel) {
-      const onPanel = utils.pointInRect(x, y, panel);
-      if (pointIn(x, y, hit.close)) {
-        gameApi.closeSettings();
-        return { handled: true };
-      }
-      if (!onPanel) {
-        gameApi.closeSettings();
-        return { handled: true };
-      }
-      for (const card of hit.sfxCards) {
-        if (pointIn(x, y, { x: card.screenX, y: card.screenY, w: card.w, h: card.h })) {
-          gameApi.selectSfx(card.sfxId);
-          return { handled: true };
-        }
-      }
-      for (const card of hit.skinCards) {
-        if (pointIn(x, y, { x: card.screenX, y: card.screenY, w: card.w, h: card.h })) {
-          gameApi.selectSkin(card.skin);
-          return { handled: true };
-        }
-      }
-      for (const row of hit.settingRows) {
-        if (pointIn(x, y, { x: row.screenX, y: row.screenY, w: row.w, h: row.h })) {
-          gameApi.toggleSetting(row.row.key);
-          return { handled: true };
-        }
-      }
-      // 面板其他区域：可能开始滚动
-      return { handled: true, scroll: true };
+    if (!panel) return { handled: true };
+    if (!utils.pointInRect(x, y, panel)) {
+      gameApi.closeSettings();
+      return { handled: true };
     }
+    if (pointIn(x, y, hit.close)) {
+      pendingPanelTouch = { action: () => gameApi.closeSettings(), x, y, accumulated: 0 };
+      panelScrolling = false;
+      return { handled: true };
+    }
+    const item = findPanelItem(x, y);
+    pendingPanelTouch = {
+      action: item ? (() => {
+        if (item.kind === 'sfx') gameApi.selectSfx(item.sfxId);
+        else if (item.kind === 'skin') gameApi.selectSkin(item.skin);
+        else if (item.kind === 'setting') gameApi.toggleSetting(item.key);
+      }) : null,
+      x,
+      y,
+      accumulated: 0,
+    };
+    panelScrolling = false;
     return { handled: true };
   }
 
@@ -864,6 +983,37 @@ function handleTouchStart(x, y) {
   return { handled: false };
 }
 
+/* 面板拖拽：返回 true 表示本次移动作为滚动消费 */
+function markPanelDrag(dy) {
+  const panel = hit.panel;
+  if (!panel) return;
+  const maxScroll = Math.max(0, panel.contentH - panel.h);
+  state.settingsScroll = Math.max(0, Math.min(maxScroll, state.settingsScroll - dy));
+}
+
+function handlePanelMove(dy) {
+  if (!pendingPanelTouch) return false;
+  pendingPanelTouch.accumulated += dy;
+  if (!panelScrolling && Math.abs(pendingPanelTouch.accumulated) > 8) {
+    panelScrolling = true;
+  }
+  if (panelScrolling) {
+    markPanelDrag(dy);
+    return true;
+  }
+  return false;
+}
+
+function handlePanelEnd() {
+  const pending = pendingPanelTouch;
+  pendingPanelTouch = null;
+  const wasScrolling = panelScrolling;
+  panelScrolling = false;
+  if (!wasScrolling && pending && pending.action) {
+    pending.action();
+  }
+}
+
 function render(beatPosition) {
   layoutTopControls();
   // 按 z-index 顺序绘制：overlay(10) < octave(12) < topControls(20) < settings(40) < toast(60)
@@ -883,8 +1033,8 @@ function init(context2d, api, icons) {
 }
 
 module.exports = {
-  init, render, handleTouchStart,
-  octaveBands,
+  init, render, handleTouchStart, handlePanelMove, handlePanelEnd,
+  octaveBands, markPanelDrag,
   showToast(message, isError) {
     clearTimeout(state.toast.timer);
     state.toast.visible = true;
@@ -896,12 +1046,7 @@ module.exports = {
       // 到时由 drawToast 触发淡出
     }, config.TOAST_VISIBLE_MS);
   },
-  markPanelDrag(dy) {
-    const panel = hit.panel;
-    if (!panel) return;
-    const maxScroll = Math.max(0, panel.contentH - panel.h);
-    state.settingsScroll = Math.max(0, Math.min(maxScroll, state.settingsScroll - dy));
-  },
+  markPanelDrag,
   maxScroll() {
     const panel = hit.panel;
     return panel ? Math.max(0, panel.contentH - panel.h) : 0;

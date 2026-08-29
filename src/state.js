@@ -45,8 +45,9 @@ const state = {
   jellyVel: 0,
   lastTick: 0,
   beatP: 0,
-  dogTransform: null,     // 每帧由主循环写入 { tx, ty, rotate, sx, sy }
-  jellyTransform: null,   // 每帧由主循环写入 { tx, ty, rotate, scale }
+  /* 每帧复用的变换对象（避免逐帧分配触发 GC 抖动） */
+  dogTransform: { tx: 0, ty: 0, rotate: 0, sx: 1, sy: 1 },
+  jellyTransform: { tx: 0, ty: 0, rotate: 0, scale: 1 },
 
   /* 村民连击 */
   villagerHitCombo: 0,
@@ -72,6 +73,7 @@ const state = {
   settingsOpen: false,
   settingsOpenSince: 0,
   settingsScroll: 0,          // 设置面板滚动偏移 px
+  panelVersion: 0,            // 面板内容变更计数（离屏缓存失效用）
   overlayHideSince: 0,        // 开始遮罩淡出起点
   overlayGone: false,
   toast: {
@@ -96,6 +98,8 @@ const state = {
   dpr: 2,
   sceneUnit: 260,
   landscape: false,
+  safeTop: 0,             // 刘海/状态栏安全区（来自 tt safeArea）
+  safeBottom: 0,          // 底部手势条安全区
 };
 
 module.exports = state;

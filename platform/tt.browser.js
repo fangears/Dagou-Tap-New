@@ -8,6 +8,11 @@
 
   let mainCanvas = null;
   const handlers = { start: [], move: [], end: [], cancel: [] };
+  const resizeCallbacks = [];
+
+  function notifyResize() {
+    for (const cb of resizeCallbacks) setTimeout(cb, 0);
+  }
 
   function touchFromEvent(e) {
     return {
@@ -35,6 +40,7 @@
         mainCanvas.style.display = 'block';
         mainCanvas.style.touchAction = 'none';
         bindTouch(mainCanvas);
+        bindResizeWatch(mainCanvas);
         return mainCanvas;
       }
       return document.createElement('canvas');
@@ -71,7 +77,7 @@
     onTouchCancel(cb) { handlers.cancel.push(cb); },
 
     onWindowResize(cb) {
-      window.addEventListener('resize', () => setTimeout(cb, 0));
+      resizeCallbacks.push(cb);
     },
 
     getStorageSync(key) {
@@ -104,6 +110,14 @@
 
   function emit(list, res) {
     for (const cb of list) cb(res);
+  }
+
+  /* 面板/窗口尺寸变化都通知游戏（部分嵌入浏览器不派发 window.resize） */
+  function bindResizeWatch(canvas) {
+    window.addEventListener('resize', notifyResize);
+    if (typeof ResizeObserver !== 'undefined') {
+      new ResizeObserver(notifyResize).observe(canvas);
+    }
   }
 
   function bindTouch(canvas) {

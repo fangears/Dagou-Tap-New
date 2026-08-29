@@ -26,16 +26,18 @@ for (const name of fs.readdirSync(SRC)) {
   报告.push([path.basename(dest), info.size]);
 }
 
-// 2. 帝皇图集：像素画内容有损/调色板重编码均会变大（实测），保留原版无损 webp，
-//    体积 2.0MB 超出主包预算 → 放入独立分包 packages/emperor/，选中帝皇皮肤时懒加载。
+// 2. 帝皇图集：原始 4320×4626 无损 webp 解码后占约 80MB 纹理显存（低端机卡顿源），
+//    降采样 50% → 2160×2313（帧 180×257，显示宽约 182 CSS px，1:1 无损视觉），
+//    显存降到约 20MB。半尺寸高画质有损 webp（实测比无损小 60%，1:1 显示无损感），
+//    放入独立分包 packages/emperor/ 懒加载。
 {
   fs.mkdirSync(path.join(root, 'packages', 'emperor'), { recursive: true });
-  fs.copyFileSync(
-    path.join(SRC, 'donghaidihuang_atlas.webp'),
-    path.join(root, 'packages', 'emperor', 'donghaidihuang_atlas.webp')
-  );
-  const size = fs.statSync(path.join(root, 'packages', 'emperor', 'donghaidihuang_atlas.webp')).size;
-  报告.push(['packages/emperor/donghaidihuang_atlas.webp (分包)', size]);
+  const dest = path.join(root, 'packages', 'emperor', 'donghaidihuang_atlas.webp');
+  const info = await sharp(path.join(SRC, 'donghaidihuang_atlas.webp'))
+    .resize(2160, 2313, { kernel: 'lanczos3' })
+    .webp({ quality: 90, alphaQuality: 90, effort: 5 })
+    .toFile(dest);
+  报告.push(['packages/emperor/donghaidihuang_atlas.webp (分包, @0.5)', info.size]);
 }
 
 // 3. 帝皇小图标 webp → png（小游戏端 webp 兼容性存疑，小图标直接转 png）

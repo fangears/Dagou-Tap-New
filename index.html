@@ -6,7 +6,7 @@
 <meta name="theme-color" content="#fff2dc" />
 <title>大狗Tap</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐶</text></svg>" />
-<script src="//s1.hdslb.com/bfs/seed/toy/app/sdk/toy-sdk.js"></script>
+<script async src="//s1.hdslb.com/bfs/seed/toy/app/sdk/toy-sdk.js"></script>
 <style>
   /* 全页面限定调色板：米白底 + 主色黄 + 次色灰（极少点缀色） */
   :root {
@@ -1682,7 +1682,29 @@
     </div>
   </div>
 
-  <script src="audio-data.js?v=20260726-villager-hit"></script>
-  <script src="main.js?v=20260726-villager-hit"></script>
+  <script>
+  // 部分托管平台会把页面资源改写到自家 CDN，不可用时会让脚本长时间阻塞。
+  // 因此核心脚本统一从站点本体直连加载，并把图片引用还原为站点路径。
+  (function () {
+    function fixImages() {
+      var imgs = document.images;
+      for (var i = 0; i < imgs.length; i++) {
+        var m = imgs[i].src.match(/cdn\.[^/]+\/(?:cached-[^/]+|uncached-[^/]+)\/[^/]+\/(.+?)(?:\?.*)?$/);
+        if (m && m[1].indexOf('/') !== 0) imgs[i].src = m[1];
+      }
+    }
+    function load(src, next) {
+      var s = document.createElement('script');
+      s.src = src;
+      if (next) s.onload = next;
+      document.head.appendChild(s);
+    }
+    load('audio-data.js?v=20260726-villager-hit', function () {
+      if (document.readyState !== 'loading') fixImages();
+      else document.addEventListener('DOMContentLoaded', fixImages);
+      load('main.js?v=20260726-villager-hit');
+    });
+  })();
+  </script>
 </body>
 </html>
